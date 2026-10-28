@@ -232,8 +232,8 @@ export class PovJaws {
         const x = (t - 0.5) * 2;
         if (Math.sin(seed * 9.1 + i * 4.3) > 0.9) continue; // diente caido
         const jag = 0.6 + ((Math.sin(seed * 7.7 + i * 5.9) + 1) * 0.5) * 1.0;
-        const h = (0.026 + 0.022 * (1 - Math.abs(x))) * jag;
-        const w = 0.0125 + 0.006 * (1 - Math.abs(x));
+        const h = (0.02 + 0.016 * (1 - Math.abs(x))) * jag;
+        const w = 0.0105 + 0.005 * (1 - Math.abs(x));
         const tooth = new THREE.Mesh(new THREE.ConeGeometry(w, h, 5), this.teethMat);
         tooth.userData = { x, h };
         if (upper) tooth.rotation.x = Math.PI;

@@ -8,7 +8,8 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import type { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 
-import { NullAudio, type AudioFrame, type GameAudio } from "../audio/types";
+import { HorrorAudio } from "../audio/engine";
+import type { AudioFrame, GameAudio } from "../audio/types";
 import { CAMPAIGN, type LevelDef } from "../config/campaign";
 import * as K from "../config/constants";
 import { DIFFICULTIES, type DifficultyId } from "../config/difficulty";
@@ -135,7 +136,7 @@ export class Game {
     this.cb = init.callbacks;
     this.settings = init.settings ?? { ...DEFAULT_SETTINGS };
     this.progress = init.progress ?? { ...DEFAULT_PROGRESS };
-    this.audio = init.audio ?? new NullAudio();
+    this.audio = init.audio ?? new HorrorAudio();
     this.manual = !!init.manual;
 
     const w = Math.max(2, this.container.clientWidth), h = Math.max(2, this.container.clientHeight);
@@ -307,6 +308,7 @@ export class Game {
     this.scare.endDeath();
     this.hud.setVisible(false);
     this.run = null;
+    this.audio.resume();
     await this.loadLevel(0, "normal", null);
     this.setPhase("menu");
   }
@@ -413,6 +415,7 @@ export class Game {
   private async loadLevel(index: number, diff: DifficultyId, run: RunState | null): Promise<void> {
     this.setPhase("loading");
     await nextFrame();
+    if (this.disposed) return;
     this.clearLevel();
     const level = CAMPAIGN[index];
     const difficulty = DIFFICULTIES[diff];
@@ -420,8 +423,10 @@ export class Game {
     const theme = THEMES[level.theme];
     this.theme = theme;
     await nextFrame();
+    if (this.disposed) return;
     const tex = this.getTextures(theme);
     await nextFrame();
+    if (this.disposed) return;
     this.view = new LevelView(this.sim, theme, tex, this.settings.quality);
     this.scene.add(this.view.group);
     for (const g of this.sim.ghosts) {
@@ -809,8 +814,8 @@ export class Game {
     this.hud.setSonarVisible(false);
     this.audio.playLevelComplete();
     this.hud.message("¡LO LOGRASTE!", 3, "good");
-    this.setPhase("levelclear");
     this.saveLevelProgress();
+    this.setPhase(this.isFinalLevel ? "victory" : "levelclear");
   }
 
   private updateOutro(dt: number): void {

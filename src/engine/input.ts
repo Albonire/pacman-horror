@@ -35,6 +35,7 @@ export class Input {
   /** Cuando es true se evita el comportamiento por defecto de Espacio/Tab/flechas. */
   capture = false;
   private lockFailures = 0;
+  private ignoreLookUntil = 0;
 
   constructor(el: HTMLElement, cb: InputCallbacks) {
     this.el = el;
@@ -160,9 +161,10 @@ export class Input {
 
   private onMouseMove = (e: MouseEvent): void => {
     if (!this.locked) return;
-    // Chrome puede entregar picos enormes al capturar/liberar el raton
-    const mx = Math.max(-300, Math.min(300, e.movementX || 0));
-    const my = Math.max(-300, Math.min(300, e.movementY || 0));
+    // Chrome entrega un salto enorme en el primer evento tras capturar el raton: se ignora un instante
+    if (performance.now() < this.ignoreLookUntil) return;
+    const mx = Math.max(-160, Math.min(160, e.movementX || 0));
+    const my = Math.max(-160, Math.min(160, e.movementY || 0));
     this.lookDX += mx;
     this.lookDY += my;
   };
@@ -183,7 +185,7 @@ export class Input {
   private onLockChange = (): void => {
     const was = this.locked;
     this.locked = document.pointerLockElement === this.el;
-    if (this.locked) this.lockFailures = 0;
+    if (this.locked) { this.lockFailures = 0; this.ignoreLookUntil = performance.now() + 180; this.lookDX = 0; this.lookDY = 0; }
     if (was && !this.locked) {
       this.lookDX = 0; this.lookDY = 0;
       this.cb.onLockLost();
