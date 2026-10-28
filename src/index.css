@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    background: #000;
+    overflow: hidden;
+  }
+}
+
+/* Estética de monitor analógico / visor CRT */
+.font-crt {
+  font-family: "Courier New", ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.08em;
+}
+
+/* Las barras del HUD empiezan en 0; el motor fija el ancho inline */
+.hud-fill {
+  width: 0%;
+  transition: width 0.08s linear, background 0.2s linear;
+}
+
+/* Viñeta roja de daño / batería baja (el motor fija la opacidad) */
+.vignette-red {
+  background: radial-gradient(circle, transparent 42%, rgba(130, 0, 0, 0.65) 100%);
+}
+
+/* Líneas de barrido CRT superpuestas */
+.crt-scanlines {
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.28) 0px,
+    rgba(0, 0, 0, 0.28) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: multiply;
+}
+
+/* Evitar selección de texto y cursor de texto en el juego */
+canvas {
+  display: block;
+  outline: none;
+  cursor: crosshair;
+}
