@@ -1,0 +1,97 @@
+// Plataforma de camara: primera persona (ojos de Pac-Man) y tercera persona, con balanceo,
+// respiracion, sacudidas y variaciones de FOV.
+
+import * as THREE from "three";
+import * as K from "../config/constants";
+import { rayDistance } from "../sim/collision";
+import type { Maze } from "../sim/maze";
+import type { PlayerSim } from "../sim/player";
+
+export type CamMode = "fp" | "tp";
+
+export class CameraRig {
+  readonly camera: THREE.PerspectiveCamera;
+  mode: CamMode = "fp";
+  pitch = 0;
+  baseFov = 78;
+  /** 0..1 */
+  trauma = 0;
+  roll = 0;
+  fovPunch = 0;
+  private bobPhase = 0;
+  private bobAmp = 0;
+  private breath = 0;
+  private time = 0;
+  /** Direccion de mirada final (para linterna y audio). */
+  readonly forward = new THREE.Vector3(0, 0, -1);
+  readonly position = new THREE.Vector3();
+  /** Pose forzada (jumpscare). Si no es null se ignora al jugador. */
+  override: { pos: THREE.Vector3; target: THREE.Vector3; fov: number; roll: number } | null = null;
+  headBob = true;
+
+  constructor(aspect: number) {
+    this.camera = new THREE.PerspectiveCamera(this.baseFov, aspect, 0.06, 140);
+    this.camera.rotation.order = "YXZ";
+  }
+
+  addTrauma(t: number): void { this.trauma = Math.min(1, this.trauma + t); }
+
+  setAspect(a: number): void { this.camera.aspect = a; this.camera.updateProjectionMatrix(); }
+
+  update(dt: number, p: PlayerSim, maze: Maze, opts: { exertion: number; tension: number; frozen: boolean }): void {
+    this.time += dt;
+    this.trauma = Math.max(0, this.trauma - dt * 1.6);
+    this.fovPunch *= Math.exp(-dt * 6);
+    const cam = this.camera;
+
+    // balanceo: sigue la distancia recorrida
+    const target = this.headBob ? Math.min(1, p.speed / K.PLAYER_RUN) : 0;
+    this.bobAmp += (target - this.bobAmp) * Math.min(1, dt * 8);
+    this.bobPhase += p.speed * dt * (p.running ? 1.9 : 2.1);
+    this.breath += dt * (1.1 + opts.exertion * 3.2);
+    const breathAmp = (this.headBob ? 0.012 : 0.004) * (1 + opts.exertion * 2.2);
+    const bobY = Math.sin(this.bobPhase * 2) * 0.026 * this.bobAmp + Math.sin(this.breath) * breathAmp;
+    const bobX = Math.cos(this.bobPhase) * 0.018 * this.bobAmp;
+    const rollWalk = Math.cos(this.bobPhase) * 0.0085 * this.bobAmp;
+
+    const shake = this.trauma * this.trauma;
+    const sx = (Math.sin(this.time * 47.1) + Math.sin(this.time * 31.7 + 1.3)) * 0.5 * shake * 0.05;
+    const sy = (Math.sin(this.time * 39.3 + 2.1) + Math.sin(this.time * 53.9)) * 0.5 * shake * 0.05;
+    const sr = Math.sin(this.time * 29.3) * shake * 0.05;
+
+    if (this.override) {
+      cam.position.copy(this.override.pos);
+      cam.lookAt(this.override.target);
+      cam.rotateZ(this.override.roll + sr);
+      cam.fov = this.override.fov;
+      cam.updateProjectionMatrix();
+      cam.getWorldDirection(this.forward);
+      this.position.copy(cam.position);
+      return;
+    }
+
+    const yaw = p.yaw + sx;
+    const pitch = this.pitch + sy;
+    const rx = Math.cos(p.yaw), rz = -Math.sin(p.yaw);
+
+    if (this.mode === "fp") {
+      cam.position.set(p.x + rx * bobX, K.EYE_H + bobY, p.z + rz * bobX);
+      cam.rotation.set(pitch, yaw, rollWalk + this.roll + sr);
+    } else {
+      // tercera persona: detras y arriba, acortada si hay un muro
+      const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
+      const dist = Math.max(0.5, rayDistance(maze, p.x, p.z, -fx, -fz, 2.9) - 0.3);
+      cam.position.set(p.x - fx * dist, K.EYE_H + 0.95 + bobY * 0.5 + Math.max(0, -this.pitch) * 1.2, p.z - fz * dist);
+      cam.rotation.set(Math.min(0.3, pitch * 0.6 - 0.18), yaw, this.roll + sr);
+    }
+
+    // FOV: base + correr - tension + golpe
+    const fov = this.baseFov + (p.running ? 7 : 0) - opts.tension * 4 + this.fovPunch;
+    if (Math.abs(cam.fov - fov) > 0.01) {
+      cam.fov += (fov - cam.fov) * Math.min(1, dt * 7);
+      cam.updateProjectionMatrix();
+    }
+    cam.getWorldDirection(this.forward);
+    this.position.copy(cam.position);
+  }
+}
