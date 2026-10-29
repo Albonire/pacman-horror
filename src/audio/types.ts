@@ -29,6 +29,8 @@ export interface AudioFrame {
   ghosts: AudioGhost[];
   /** Frecuencia de los sonidos de pavor ambientales (0 = ninguno). */
   dread: number;
+  /** 0..1: cuan dentro de una zona oscura esta el jugador. */
+  darkness: number;
 }
 
 /** Superficie de audio que usa el motor. Implementada por HorrorAudio (Web Audio) y NullAudio (silencio). */
@@ -80,6 +82,9 @@ export interface GameAudio {
   /** Efecto de screamer de flash (cara a pantalla completa). */
   playScreamerFlash(): void;
   playHeartbeat(strength: number): void;
+  playPickup(): void;
+  playSwitch(): void;
+  playHide(inside: boolean): void;
   /** Golpe de susto sincronizado con un destello de screamer. */
   playScareHit(strength: number): void;
   /** Fuerza un sonido de pavor concreto (depuracion y pruebas). */
@@ -125,6 +130,9 @@ export class NullAudio implements GameAudio {
   playBlackout(): void {}
   playScreamerFlash(): void {}
   playHeartbeat(): void {}
+  playPickup(): void {}
+  playSwitch(): void {}
+  playHide(): void {}
   playScareHit(): void {}
   playDread(): void {}
   dispose(): void {}

@@ -188,6 +188,11 @@ export class Ambience {
     }
   }
 
+  /** En zonas oscuras el ambiente se apaga: queda el silencio incomodo. */
+  setDark(d: number): void {
+    if (this.alive) this.out.gain.setTargetAtTime(1 - 0.55 * d, this.S.now, 0.6);
+  }
+
   stop(fade = 1.2): void {
     this.alive = false;
     const t = this.S.now;

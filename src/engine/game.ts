@@ -214,6 +214,7 @@ export class Game {
       onToggleCamera: () => this.toggleCamera(),
       onToggleMute: () => this.toggleMute(),
       onBite: () => this.bite(),
+      onInteract: () => { if (this.phase === "playing") this.interactReq = true; },
       onLockLost: () => { if (this.phase === "playing" && this.input.needsLock) this.pause(); },
       onLockError: () => this.onLockError(),
     });
@@ -524,7 +525,7 @@ export class Game {
   // =====================================================================================
 
   private toggleLight(): void {
-    if (this.phase !== "playing" || !this.sim) return;
+    if (this.phase !== "playing" || !this.sim || this.sim.hidden) return;
     const p = this.sim.player;
     const before = p.flashlightOn;
     p.toggleFlashlight();
@@ -546,11 +547,12 @@ export class Game {
   }
 
   private biteReq = false;
+  private interactReq = false;
   private freezeHintShown = false;
   /** Cuan dentro de una zona oscura esta el jugador (0..1, suavizado). */
   private darkness = 0;
   private bite(): void {
-    if (this.phase !== "playing") return;
+    if (this.phase !== "playing" || this.sim?.hidden) return;
     this.jaws.chomp(0.62);
     this.pacman.chomp(0.95);
     this.audio.playBite();
@@ -643,7 +645,7 @@ export class Game {
     const pos = new THREE.Vector3(this.attractX, K.EYE_H + Math.sin(this.time * 0.9) * 0.015, z + Math.sin(this.time * 0.31) * 0.25);
     const tgt = new THREE.Vector3(this.attractX + 6, K.EYE_H + 0.05 + Math.sin(this.time * 0.4) * 0.05, z + Math.sin(this.time * 0.2) * 0.5);
     this.rig.override = { pos, target: tgt, fov: this.rig.vfov(this.settings.fov), roll: Math.sin(this.time * 0.5) * 0.01 };
-    this.view!.update({ time: this.time, dt, playerX: pos.x, playerZ: pos.z, lightsMul: 1, powered: false, exitUnlocked: false });
+    this.view!.update({ time: this.time, dt, playerX: pos.x, playerZ: pos.z, lightsMul: 1, powered: false, exitUnlocked: false, zoneLit: sim.zoneLit.map(() => 5), ghosts: [], hiddenIndex: -1 });
     if (this.phase === "menu" || this.phase === "briefing" || this.phase === "loading") this.audio.update(this.audioFrame(0));
   }
 
@@ -672,11 +674,20 @@ export class Game {
       this.lockHintT += dt;
       if (this.lockHintT > 0.4) this.hud.showHint("Haz clic en la pantalla para capturar el ratón");
     } else {
-      this.hud.showHint(null);
+      const ih = sim.interactHint;
+      this.hud.showHint(ih === "hide" ? "E: esconderte" : ih === "switch" ? "E: encender la luz (hace ruido)" : ih === "leave" ? "E: salir del escondite" : null);
     }
 
-    sim.update(dt, { forward: axes.forward, strafe: axes.strafe, sprint: this.input.sprint, sonar: this.input.sonar, bite: this.biteReq });
-    this.biteReq = false;
+    if (sim.hidden) {
+      // asomado por las ranuras: la mirada queda limitada al hueco
+      const base = Math.atan2(sim.hidden.wall[0], sim.hidden.wall[1]);
+      let rel = p.yaw - base;
+      rel = Math.atan2(Math.sin(rel), Math.cos(rel));
+      p.yaw = base + clamp(rel, -0.95, 0.95);
+      this.rig.pitch = clamp(this.rig.pitch, -0.45, 0.45);
+    }
+    sim.update(dt, { forward: axes.forward, strafe: axes.strafe, sprint: this.input.sprint, sonar: this.input.sonar, bite: this.biteReq, interact: this.interactReq });
+    this.biteReq = false; this.interactReq = false;
     this.levelTime += dt;
     if (this.run) this.run.totalTime += dt;
 
@@ -840,6 +851,20 @@ export class Game {
             this.hud.message("El Estático no se mueve mientras lo miras con luz. Si apartas la vista, se lanza.", 5, "info");
           }
           break;
+        case "battery":
+          this.audio.playPickup();
+          this.particles.burst(e.x, 0.7, e.z, 18, 1.6, 0.7, 0.06, 0x7dff6a, 0.5);
+          this.hud.message("Pila: la linterna se recarga", 1.8, "good");
+          break;
+        case "switch":
+          this.audio.playSwitch();
+          this.rig.addTrauma(0.2);
+          this.hud.message(e.alerted > 0 ? "La luz vuelve... y algo te oyó" : "La luz vuelve unos segundos", 2.4, e.alerted > 0 ? "warn" : "info");
+          break;
+        case "hide":
+          this.audio.playHide(e.inside);
+          if (e.inside) this.hud.message(e.seen ? "Te vieron entrar. No respires" : "Contén la respiración", 2.6, e.seen ? "warn" : "info");
+          break;
         case "bite":
           if (e.stunned > 0) {
             this.audio.playFreeze(true);
@@ -965,6 +990,9 @@ export class Game {
     view.update({
       time: this.time, dt, playerX: p.x, playerZ: p.z,
       lightsMul: this.lightsMul, powered: sim.powered, exitUnlocked: sim.exitUnlocked,
+      zoneLit: sim.zoneLit,
+      ghosts: sim.ghosts.filter((g) => g.lethal).map((g) => ({ x: g.x, z: g.z })),
+      hiddenIndex: sim.hidden ? sim.hideSpots.indexOf(sim.hidden) : -1,
     });
 
     // fantasmas
@@ -997,6 +1025,17 @@ export class Game {
     // aparicion del director
     const fk = this.director?.fake;
     if (fk) fk.view.update(dt, this.time, fk.g, p.x, p.z, false);
+
+    // zonas apagadas: menos luz ambiente, mas niebla
+    const dTarget = this.phase === "playing" || this.phase === "dying" ? sim.darknessAt(p.x, p.z) : 0;
+    this.darkness += (dTarget - this.darkness) * Math.min(1, dt * 1.8);
+    const th = this.theme;
+    if (th) {
+      this.hemi.intensity = th.hemiIntensity * (1 - 0.82 * this.darkness);
+      this.ambient.intensity = th.ambientIntensity * (1 - 0.8 * this.darkness);
+      const fog = this.scene.fog as THREE.FogExp2 | null;
+      if (fog) fog.density = th.fogDensity * (1 + 0.8 * this.darkness);
+    }
 
     // fruta
     this.fruit.update(dt, p.x, p.z, sim.fruit.timer);
@@ -1063,6 +1102,13 @@ export class Game {
       if (Math.sin(this.time * 31) + Math.sin(this.time * 17) > 1.2 - (22 - p.battery) * 0.04) inten *= 0.15;
     }
     if (p.sonarOpen) inten *= 0.5;
+    // un fantasma cerca interfiere con la linterna: titila mas cuanto mas cerca
+    let nearest = 99;
+    for (const g of sim.ghosts) if (g.lethal) nearest = Math.min(nearest, Math.hypot(g.x - p.x, g.z - p.z));
+    if (nearest < 8) {
+      const k = (8 - nearest) / 8;
+      if (Math.sin(this.time * 47) + Math.sin(this.time * 23 + 1.3) > 1.7 - k * 1.7) inten *= 0.08;
+    }
     // autoexposicion: la ley del inverso del cuadrado quema las paredes cercanas, asi que
     // se atenua el haz segun la distancia al muro que tiene delante
     const [lfx, lfz] = p.forwardVec();
@@ -1083,7 +1129,7 @@ export class Game {
     fx.time = this.time;
     const t = this.tension;
     fx.pulse = t > 0.2 ? this.heartPulse * t : 0;
-    fx.vignette = clamp((22 - p.battery) / 22, 0, 1) * 0.5 + (p.invuln > 0 ? 0.25 : 0);
+    fx.vignette = clamp((22 - p.battery) / 22, 0, 1) * 0.5 + (p.invuln > 0 ? 0.25 : 0) + this.darkness * 0.22 + (sim.hidden ? 0.4 : 0);
     fx.desaturate = t * 0.28 + (p.exhausted ? 0.18 : 0);
     fx.brightness = this.settings.brightness;
     fx.grain = 0.05 + t * 0.07;
@@ -1136,6 +1182,7 @@ export class Game {
       chasing: sim.ghosts.some((g) => g.mode === "chase"),
       sonar: p.sonarOpen,
       theme: sim.level.theme,
+      darkness: this.darkness,
       dread: (this.settings.scares === "full" ? 1 : this.settings.scares === "reduced" ? 0.6 : 0.35) * (this.run ? DIFFICULTIES[this.run.diff].ambientScares : 1),
       ghosts: sim.ghosts.map((g) => ({
         kind: g.kind, x: g.x, y: 1.4, z: g.z, mode: g.mode, frozen: g.frozen, startled: g.startled,

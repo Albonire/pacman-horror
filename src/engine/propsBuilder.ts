@@ -266,7 +266,8 @@ export function buildProps(sim: Simulation, theme: ThemeId): PropsResult {
   const list = THEME_PROPS[theme];
   const total = list.reduce((a, p) => a + p.weight, 0);
 
-  const avoid: [number, number][] = [layout.player, layout.exit, layout.fruit, ...layout.ghosts, ...layout.pellets];
+  const avoid: [number, number][] = [layout.player, layout.exit, layout.fruit, ...layout.ghosts, ...layout.pellets,
+    ...layout.hideSpots.map((h) => h.cell), ...layout.switches.map((w) => w.cell), ...layout.batteries];
   const cands: { cx: number; cy: number; nx: number; nz: number }[] = [];
   for (let cy = 1; cy < maze.H - 1; cy++) for (let cx = 3; cx < maze.W - 3; cx++) {
     if (!maze.isWalkable(cx, cy) || maze.rows[cy][cx] === "S") continue;

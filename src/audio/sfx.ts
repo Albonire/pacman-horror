@@ -287,3 +287,26 @@ export function heartbeat(S: Synth, strength: number): void {
   S.tone({ f0: 58, f1: 38, dur: 0.17, vol: 0.4 * s, lp: 180, a: 0.012, dest: S.voice });
   S.tone({ f0: 50, f1: 34, dur: 0.2, vol: 0.28 * s, lp: 160, a: 0.012, t: S.now + 0.19, dest: S.voice });
 }
+
+/** Pila recogida: clic metalico y un acorde corto y limpio (lo unico "bueno" que suena). */
+export function pickup(S: Synth): void {
+  S.noise({ bp: 3500, q: 4, dur: 0.05, vol: 0.4, a: 0.002 });
+  [523.3, 659.3, 784].forEach((f, i) => S.tone({ type: "triangle", f0: f, dur: 0.5, vol: 0.12, t: S.now + 0.05 + i * 0.07, send: 0.6, lp: 3000 }));
+  S.tone({ f0: 90, f1: 60, dur: 0.12, vol: 0.4 });
+}
+
+/** Palanca de fusibles: golpe seco, zumbido electrico y tubos que chisporrotean. */
+export function switchOn(S: Synth): void {
+  S.noise({ kind: "brown", lp: 600, dur: 0.18, vol: 0.9, a: 0.002 });
+  S.tone({ f0: 160, f1: 55, dur: 0.25, vol: 0.8, a: 0.002 });
+  S.tone({ type: "sawtooth", f0: 60, f1: 120, dur: 1.4, vol: 0.12, lp: 500, a: 0.1, send: 0.4 });
+  for (let i = 0; i < 6; i++) S.noise({ hp: 3000, dur: 0.04, vol: 0.2, t: S.now + 0.25 + i * 0.09 + Math.random() * 0.05 });
+}
+
+/** Entrar o salir del armario: chirrido de bisagra y portazo suave; dentro, el mundo suena amortiguado. */
+export function hide(S: Synth, inside: boolean): void {
+  S.tone({ type: "sawtooth", f0: inside ? 240 : 380, f1: inside ? 380 : 240, dur: 0.55, vol: 0.12, bp: 800, q: 5, vibRate: 12, vibDepth: 60, a: 0.05 });
+  S.noise({ kind: "brown", lp: 400, dur: 0.15, vol: 0.7, t: S.now + 0.5, a: 0.002 });
+  S.tone({ f0: 120, f1: 50, dur: 0.2, vol: 0.6, t: S.now + 0.5, a: 0.002 });
+  if (inside) S.duck(0.3, 2.5);
+}

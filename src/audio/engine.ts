@@ -15,7 +15,7 @@ import { BreathEngine, GhostVoice } from "./voices";
  */
 const MIX = {
   waka: 0.4, step: 0.6, bite: 0.26, ghostEaten: 0.32, pellet: 0.5, heartbeat: 0.75, scream: 0.4,
-  screamerFlash: 0.3, scareHit: 0.4, dread: 0.6, flashlight: 0.6, fruit: 0.5, wake: 0.6, pant: 1.1,
+  screamerFlash: 0.3, scareHit: 0.4, pickup: 0.5, switchOn: 0.6, hide: 0.7, dread: 0.6, flashlight: 0.6, fruit: 0.5, wake: 0.6, pant: 1.1,
 } as const;
 
 export class HorrorAudio implements GameAudio {
@@ -196,9 +196,10 @@ export class HorrorAudio implements GameAudio {
     if (!this.assumeRunning && S.ctx.state !== "running") { this.kick(); return; }
     S.setListener(f.listener.x, f.listener.y, f.listener.z, f.listener.fx, f.listener.fy, f.listener.fz);
     this.ambience?.update(f.dt);
+    this.ambience?.setDark(f.darkness);
     this.drone?.update(f.tension);
     this.siren?.update(f.dt, { progress: f.progress, chasing: f.chasing, tension: f.tension, powered: f.powered, powerLow: f.powerLow });
-    this.dread?.update({ dt: f.dt, tension: f.tension, chasing: f.chasing, intensity: f.dread, listener: { x: f.listener.x, z: f.listener.z, fx: f.listener.fx, fz: f.listener.fz } });
+    this.dread?.update({ dt: f.dt, tension: f.tension, chasing: f.chasing, intensity: f.dread * (1 + f.darkness * 1.2), listener: { x: f.listener.x, z: f.listener.z, fx: f.listener.fx, fz: f.listener.fz } });
     this.breath.update(S, f.dt, { exertion: f.exertion, tension: f.tension, running: f.running, exhausted: f.exhausted });
     for (const g of f.ghosts) {
       let v = this.voices.get(g.kind);
@@ -251,6 +252,9 @@ export class HorrorAudio implements GameAudio {
   playBlackout(on: boolean): void { this.with((S) => fx.blackout(S, on)); }
   playScreamerFlash(): void { this.with((S) => fx.screamerFlash(S), MIX.screamerFlash); }
   duck(level: number, secs: number): void { this.S?.duck(level, secs); }
+  playPickup(): void { this.with((S) => fx.pickup(S), MIX.pickup); }
+  playSwitch(): void { this.with((S) => fx.switchOn(S), MIX.switchOn); }
+  playHide(inside: boolean): void { this.with((S) => fx.hide(S, inside), MIX.hide); }
   playHeartbeat(strength: number): void { this.with((S) => fx.heartbeat(S, strength), MIX.heartbeat); }
   playScareHit(strength: number): void { this.with((S) => fx.scareHit(S, strength), MIX.scareHit); }
   playDread(kind: string): void {

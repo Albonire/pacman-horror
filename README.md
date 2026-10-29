@@ -12,7 +12,8 @@ Todo es procedural: texturas, modelos, música, voces, respiraciones y sustos se
 | --- | --- |
 | Moverse (relativo a donde miras) | `W` `A` `S` `D` o flechas |
 | Mirar | Ratón (clic para capturarlo) |
-| Girar con teclado | `Q` `E` (en modo "solo teclado" también `←` `→`, y `R` `V` para inclinar) |
+| Interactuar (esconderse, palanca, salir) | `E` o `Intro` |
+| Girar con teclado | `Q` (en modo "solo teclado" también `E`, `←` `→`, y `R` `V` para inclinar) |
 | Correr | `Shift` (gasta aliento; los fantasmas oyen los pasos rápidos) |
 | Ecolocalización (mapa y entidades) | `Espacio` o clic derecho, mantener; frena el paso |
 | Linterna "Resplandor" | `F` (gasta batería; congela al Estático) |
@@ -35,6 +36,9 @@ Si el equipo no sostiene unos 26 fps durante unos segundos de partida, el juego 
 - Vida extra a los 10 000 puntos base.
 - El mordisco (`X`) aturde unos 1,7 s al fantasma que tienes delante (a menos de ~2 u, con línea de visión): no se mueve ni mata. Cuesta aliento y tarda 4,5 s en recargarse. Si el fantasma está asustado, se lo come.
 - Los fantasmas cercanos con línea de visión se abalanzan en línea recta: pegarse a una esquina de la celda no sirve de escondite.
+- Hay zonas oscuras (2 a 4 por nivel) sin luminarias: solo te queda la linterna. Las pilas del suelo la recargan (+45 %). Las cajas de fusibles de su borde (`E`) encienden la zona 14 s, pero el chasquido se oye por el sector y alerta a los fantasmas cercanos.
+- Los armarios (`E`) sirven de escondite: dentro no ves bien ni tienes linterna. Si ningún fantasma te vio entrar, pierden el rastro; los que se detienen junto al armario tienen un 50 % de descubrirte tras 2 s.
+- Un fantasma peligroso cerca hace titilar tu linterna y las luces del pasillo: es el aviso.
 - Si te atrapan, reapareces con unos segundos de protección y los fantasmas vuelven a dormir. Los nodos comidos no se reponen.
 - Hay un túnel continuo en la fila central que conecta ambos bordes del mapa.
 
@@ -64,10 +68,25 @@ Cada nivel tiene su laberinto generado (semilla fija), su textura, iluminación,
 
 | Modo | Vidas | Notas |
 | --- | --- | --- |
-| Aprendiz | 6 | 6 | 5 | 4 | 5 | 5 |
-| Normal | 6 | 4 | 2 | 0 | 3 | 0 |
-| Pesadilla | 3 | 0 | 0 | 0 | 0 | 0 |
-| Muerte súbita | 0 | 0 | 0 | 0 | 0 | 0 |
+| Aprendiz | 5 | Fantasmas más lentos, poder más largo, persecuciones cortas |
+| Normal | 4 | La experiencia pensada |
+| Pesadilla | 3 | Fantasmas más rápidos y certeros, un fantasma extra |
+| Muerte súbita | 1 | Pesadilla sin segunda oportunidad |
+
+La puntuación se multiplica según la dificultad. El progreso, los récords y los ajustes se guardan en `localStorage`.
+
+### Calibración con jugador automático
+
+Niveles completados por un bot evasivo (6 partidas con semilla fija por celda). El bot no usa el mordisco, las pilas, los armarios ni los interruptores, así que es un suelo de dificultad, no un jugador medio.
+
+| Modo | Nivel 1 | Nivel 2 | Nivel 3 | Nivel 4 | Nivel 5 | Nivel 6 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Aprendiz | 6/6 | 6/6 | 5/6 | 4/6 | 5/6 | 6/6 |
+| Normal | 6/6 | 4/6 | 2/6 | 0/6 | 3/6 | 0/6 |
+| Pesadilla | 3/6 | 0/6 | 0/6 | 0/6 | 0/6 | 0/6 |
+| Muerte súbita | 0/6 | 0/6 | 0/6 | 0/6 | 0/6 | 0/6 |
+
+Se reproduce con `BALANCE=1 npx vitest run src/sim/balance.test.ts`.
 
 ### Arquitectura
 
@@ -85,3 +104,14 @@ src/ui       pantallas y HUD en React
 - El render se ha comprobado con capturas en Chromium sin GPU (SwiftShader). No se ha medido el rendimiento en una GPU real; la opción "Calidad gráfica" (alta, media, baja) reduce sombras, bloom y resolución.
 - El audio se verificó con renderizado offline y análisis espectral (niveles y posición estéreo), no escuchándolo en altavoces.
 - La calibración de dificultad usa un bot, no jugadores humanos: los números de la tabla son una referencia relativa, no una promesa de lo que sentirá cada persona.
+
+## Desarrollo
+
+```bash
+npm install
+npm run dev        # servidor de desarrollo
+npm run build      # genera dist/index.html (archivo único)
+npm run typecheck  # tsc --noEmit
+npm test           # pruebas de lógica con vitest
+npm run smoke      # prueba E2E sobre dist/ (requiere `npm run build` y Chromium)
+```

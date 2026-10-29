@@ -8,6 +8,7 @@ import type { ThemeTextures, ThemeVisual } from "../gfx/themes";
 import { mulberry32 } from "../sim/rng";
 import type { Simulation } from "../sim/simulation";
 import { surfaceMaterial, sharedUniforms, withTime } from "./materials";
+import { InteractViews } from "./interactViews";
 import { buildDecals, DECALS } from "./decals";
 import { buildProps } from "./propsBuilder";
 import { buildWallGeometry } from "./wallGeometry";
@@ -23,6 +24,9 @@ interface FixtureState {
   speed: number;
   level: number;
   color: THREE.Color;
+  /** Zona oscura a la que pertenece (-1 ninguna) y si esta en su borde (parpadea en vez de apagarse del todo). */
+  zone: number;
+  edge: boolean;
 }
 
 export interface PelletView {
@@ -44,6 +48,12 @@ export interface LevelViewUpdate {
   lightsMul: number; // 0 = apagon
   powered: boolean;
   exitUnlocked: boolean;
+  /** Segundos de luz que le quedan a cada zona oscura. */
+  zoneLit: readonly number[];
+  /** Fantasmas peligrosos: apagan y hacen parpadear las luminarias cercanas. */
+  ghosts: readonly { x: number; z: number }[];
+  /** Escondite ocupado (indice) o -1. */
+  hiddenIndex: number;
 }
 
 function disposeMaterial(m: THREE.Material): void {
@@ -71,6 +81,7 @@ export class LevelView {
   readonly pellets: PelletView[] = [];
   readonly fixtureLights: THREE.PointLight[] = [];
   readonly fixtures: FixtureState[] = [];
+  private interact: InteractViews;
   readonly dust: THREE.Points;
 
   private dots: THREE.InstancedMesh;
@@ -148,6 +159,8 @@ export class LevelView {
     this.screens = props.screens;
     this.vents = props.vents;
     this.glands = props.glands;
+    this.interact = new InteractViews(sim);
+    this.group.add(this.interact.group);
 
     // ---- cortinas del tunel (vacio oscuro al final de cada conector) ----
     const curtainMat = new THREE.ShaderMaterial({
@@ -259,7 +272,13 @@ export class LevelView {
       const dead = rng() < theme.deadChance;
       const broken = !dead && rng() < theme.brokenChance;
       const col = new THREE.Color(theme.fixtureColors ? theme.fixtureColors[Math.floor(rng() * theme.fixtureColors.length)] : theme.fixtureColor);
-      this.fixtures.push({ x: sp.x, z: sp.z, dead, broken, phase: rng() * 6.28, speed: 5 + rng() * 9, level: 1, color: col });
+      let zone = -1, edge = false;
+      sim.layout.zones.forEach((z, zi) => {
+        const zw = maze.cellToWorld(z.cell[0], z.cell[1]);
+        const d = Math.hypot(zw.x - sp.x, zw.z - sp.z) / CELL;
+        if (d <= z.r + 0.5 && zone < 0) { zone = zi; edge = d > z.r - 0.9; }
+      });
+      this.fixtures.push({ x: sp.x, z: sp.z, dead, broken, phase: rng() * 6.28, speed: 5 + rng() * 9, level: 1, color: col, zone, edge });
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), sp.alongX ? 0 : Math.PI / 2);
       this.tmpM.compose(new THREE.Vector3(sp.x, orb ? WALL_H - 0.5 : WALL_H - 0.045, sp.z), q, s);
       glow.setMatrixAt(i, this.tmpM);
@@ -324,6 +343,7 @@ export class LevelView {
 
   update(u: LevelViewUpdate): void {
     sharedUniforms.uTime.value = u.time;
+    this.interact.update(u.time, u.zoneLit, u.hiddenIndex);
     const t = u.time;
 
     // fluctuacion de luminarias
@@ -338,6 +358,15 @@ export class LevelView {
         if (hash2(Math.floor(t * 20), i, 5) < 0.04) lv *= 0.2;
       } else {
         lv = 0.94 + 0.06 * Math.sin(t * 100 + f.phase);
+      }
+      if (f.zone >= 0 && !f.dead) {
+        const lit = u.zoneLit[f.zone] ?? 0;
+        if (lit <= 0) lv = f.edge ? (hash2(Math.floor(t * 5) + i, i, 7) > 0.82 ? 0.4 : 0.02) : 0;
+        else if (lit < 2.5 || lit > 13.2) lv *= hash2(Math.floor(t * 28), i, 9) > 0.45 ? 1 : 0.15; // chisporrotea al encender y al apagarse
+      }
+      for (const g of u.ghosts) {
+        const gd = Math.hypot(g.x - f.x, g.z - f.z);
+        if (gd < 8 && hash2(Math.floor(t * 14), i, 11) < ((8 - gd) / 8) * 0.6) lv *= 0.06;
       }
       lv *= u.lightsMul;
       if (u.powered) lv = lv * 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(t * 9 + f.phase));
@@ -357,8 +386,9 @@ export class LevelView {
       this.lastOrderT = t;
       const px = u.playerX, pz = u.playerZ;
       const fx = this.fixtures;
-      this.lightOrder.sort((a, b) =>
-        ((fx[a].x - px) ** 2 + (fx[a].z - pz) ** 2) - ((fx[b].x - px) ** 2 + (fx[b].z - pz) ** 2));
+      // las luminarias apagadas no ocupan un hueco del reparto de luces
+      const key = (i: number): number => (fx[i].x - px) ** 2 + (fx[i].z - pz) ** 2 + (fx[i].level < 0.06 ? 1e5 : 0);
+      this.lightOrder.sort((a, b) => key(a) - key(b));
     }
     for (let k = 0; k < this.fixtureLights.length; k++) {
       const f = this.fixtures[this.lightOrder[k]];

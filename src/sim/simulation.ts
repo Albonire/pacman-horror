@@ -52,6 +52,7 @@ const BATTERY_GAIN = 45;
 const SWITCH_LIT = 14;
 const SWITCH_ALERT_CELLS = 14;
 const HIDE_SEARCH_RANGE = 2.4;
+const HIDE_DEPTH = 0.82;
 const BITE_STUN = 1.7;
 
 export class Simulation {
@@ -266,7 +267,7 @@ export class Simulation {
 
     if (this.hidden) {
       const h = this.hidden;
-      this.player.x = h.x + h.wall[0] * 0.55; this.player.z = h.z + h.wall[1] * 0.55;
+      this.player.x = h.x + h.wall[0] * HIDE_DEPTH; this.player.z = h.z + h.wall[1] * HIDE_DEPTH;
       this.player.vx = 0; this.player.vz = 0; this.player.noise = 0;
     }
     this.checkBatteries();
@@ -527,7 +528,7 @@ export class Simulation {
     this.prevLight = p.flashlightOn;
     p.flashlightOn = false;
     p.sonarOpen = false; p.running = false;
-    p.x = h.x + h.wall[0] * 0.55; p.z = h.z + h.wall[1] * 0.55;
+    p.x = h.x + h.wall[0] * HIDE_DEPTH; p.z = h.z + h.wall[1] * HIDE_DEPTH;
     p.yaw = Math.atan2(h.wall[0], h.wall[1]); // mira hacia fuera del hueco
     this.searchT.clear();
     this.emit({ type: "hide", inside: true, seen: this.hiddenSeen });

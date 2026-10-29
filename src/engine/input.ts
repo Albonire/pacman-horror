@@ -12,6 +12,7 @@ export interface InputCallbacks {
   onToggleCamera: () => void;
   onToggleMute: () => void;
   onBite: () => void;
+  onInteract: () => void;
   /** El navegador libero el raton (p. ej. Esc). */
   onLockLost: () => void;
   onLockError: () => void;
@@ -121,8 +122,8 @@ export class Input {
       if (this.down("ArrowRight")) strafe += 1;
       if (this.down("ArrowLeft")) strafe -= 1;
     }
-    if (this.down("KeyE")) turn -= 1;
     if (this.down("KeyQ")) turn += 1;
+    if (kbTurn && this.down("KeyE")) turn -= 1; // en modo raton E interactua
     if (kbTurn) {
       // en modo teclado: R/F inclinan la vista
       if (this.down("KeyR")) lookV += 1;
@@ -153,6 +154,8 @@ export class Input {
       case "KeyC": this.cb.onToggleCamera(); break;
       case "KeyM": this.cb.onToggleMute(); break;
       case "KeyX": this.cb.onBite(); break;
+      case "KeyE": if (this.mode === "mouse") this.cb.onInteract(); break;
+      case "Enter": this.cb.onInteract(); break;
     }
   };
 
