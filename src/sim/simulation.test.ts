@@ -145,7 +145,7 @@ describe("Simulation: invariantes con fantasmas activos", () => {
     sim.update(DT, { forward: 0, strafe: 0, sprint: false, sonar: false });
     expect(sim.state).toBe("caught");
     expect(sim.loseLife()).toBe(false);
-    expect(sim.lives).toBe(2);
+    expect(sim.lives).toBe(DIFFICULTIES.normal.lives - 1);
     expect(sim.state).toBe("playing");
     expect(sim.player.invuln).toBeGreaterThan(1);
     expect(sim.ghosts.every((x) => x.mode === "dormant")).toBe(true);

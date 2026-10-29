@@ -180,7 +180,7 @@ export class Simulation {
   /** Fraccion de puntos pendientes (para el Acechador "Elroy"). */
   private elroyLevel(): 0 | 1 | 2 {
     const frac = this.remainingDots / this.totalDots;
-    return frac <= 0.12 ? 2 : frac <= 0.25 ? 1 : 0;
+    return frac <= 0.1 ? 2 : frac <= 0.2 ? 1 : 0;
   }
 
   addScore(base: number): void {
@@ -325,7 +325,7 @@ export class Simulation {
         // scatter / chase
         let speed = baseSpeed * tunnel;
         let mode = g.mode;
-        if (g.kind === 0 && elroy > 0) { mode = "chase"; speed *= elroy === 2 ? 1.12 : 1.06; }
+        if (g.kind === 0 && elroy > 0) { mode = "chase"; speed *= elroy === 2 ? 1.08 : 1.04; }
         if (g.dash > 0) speed *= 1.5;
         g.speedCells = speed;
         wrapped = g.advance(this.maze, dt, (gg) => {

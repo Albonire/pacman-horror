@@ -177,8 +177,8 @@ function build(spec: LayoutSpec, seed: number): LevelLayout | null {
   }
   if (ghosts.length < 4) return null;
 
-  // pellets: una por esquina, fuera de la fila del tunel
-  const corners: Cell[] = [[1, 1], [W - 2, 1], [1, H - 2], [W - 2, H - 2]];
+  // pellets: una por esquina y una en cada borde lateral (alternadas en altura), fuera de la fila del tunel
+  const corners: Cell[] = [[1, 1], [W - 2, 1], [1, H - 2], [W - 2, H - 2], [1, cy - 4], [W - 2, cy + 4]];
   const pellets: Cell[] = [];
   for (const corner of corners) {
     const c = nearestTo(open2.filter((o) => isFree(o) && o[1] !== tunnelRow), corner[0], corner[1]);

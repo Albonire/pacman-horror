@@ -17,6 +17,7 @@ import { THEMES, type ThemeTextures, type ThemeVisual } from "../gfx/themes";
 import { disposeTexSet } from "../gfx/texkit";
 import type { FaceKind } from "../gfx/faces";
 import type { SimEvent } from "../sim/events";
+import { rayDistance } from "../sim/collision";
 import { Simulation } from "../sim/simulation";
 import { ScareDirector } from "./director";
 import { disposeFaceCache, GhostView } from "./ghostView";
@@ -101,6 +102,7 @@ export class Game {
   private ambient = new THREE.AmbientLight(0x332a18, 0.5);
   private headlamp = new THREE.SpotLight(0xfff0c0, 60, 34, 0.5, 0.75, 2);
   private headTarget = new THREE.Object3D();
+  private headDist = 6;
   private glow = new THREE.PointLight(0xffd23a, 2.2, 5, 2);
   private ghostLights: THREE.PointLight[] = [];
   private pelletLight = new THREE.PointLight(0xffa22e, 0, 9, 2);
@@ -996,6 +998,12 @@ export class Game {
       if (Math.sin(this.time * 31) + Math.sin(this.time * 17) > 1.2 - (22 - p.battery) * 0.04) inten *= 0.15;
     }
     if (p.sonarOpen) inten *= 0.5;
+    // autoexposicion: la ley del inverso del cuadrado quema las paredes cercanas, asi que
+    // se atenua el haz segun la distancia al muro que tiene delante
+    const [lfx, lfz] = p.forwardVec();
+    const wallD = rayDistance(sim.maze, p.x, p.z, lfx, lfz, 6);
+    this.headDist += (wallD - this.headDist) * Math.min(1, dt * 8);
+    inten *= clamp(Math.pow(this.headDist / 4.5, 2), 0.1, 1);
     head.intensity = p.lightOn && this.phase !== "dying" ? inten : 0;
     this.glow.position.set(origin.x, K.EYE_H + 0.1, origin.z);
     this.glow.intensity = sim.powered ? 10 + Math.sin(this.time * 12) * 3 : 1.8;
