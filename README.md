@@ -64,45 +64,10 @@ Cada nivel tiene su laberinto generado (semilla fija), su textura, iluminación,
 
 | Modo | Vidas | Notas |
 | --- | --- | --- |
-| Aprendiz | 5 | Fantasmas más lentos, poder más largo, persecuciones cortas |
-| Normal | 4 | La experiencia pensada |
-| Pesadilla | 3 | Fantasmas más rápidos y certeros, un fantasma extra |
-| Muerte súbita | 1 | Pesadilla sin segunda oportunidad |
-
-La puntuación se multiplica según la dificultad. El progreso, los récords y los ajustes se guardan en `localStorage`.
-
-## Desarrollo
-
-```bash
-npm install
-npm run dev        # servidor de desarrollo
-npm run build      # genera dist/index.html (archivo único)
-npm run typecheck  # tsc --noEmit
-npm test           # pruebas de lógica con vitest
-npm run smoke      # prueba E2E sobre dist/ (requiere `npm run build` y Chromium)
-```
-
-`?debug` en la URL expone el motor en `window.__umbral` (lo usa la prueba de humo).
-
-### Pruebas
-
-- `src/sim/*.test.ts`: generación de laberintos, túnel continuo, reglas, invariantes con fantasmas activos y calibración de dificultad.
-- `src/sim/bot.ts`: jugador automático que planifica con un BFS "seguro" (solo expande celdas que alcanza antes que cualquier fantasma). Es una cota optimista: ve a todos los fantasmas y no usa linterna ni sonar.
-- `BALANCE=1 npx vitest run src/sim/balance.test.ts` imprime la tabla completa de 6 niveles x 4 dificultades (6 partidas por celda).
-- `scripts/smoke.mjs`: abre la compilación en Chromium, recorre advertencia, menú, dificultad, ficha, teclado real (W, Shift, F), pausa, ajustes, muerte con screamer, victoria y guardado del progreso, y falla ante cualquier error de consola.
-
-`CHROME_PATH` permite elegir el ejecutable de Chromium para el script de humo.
-
-### Calibración con el bot
-
-Partidas completadas de 6 (misma semilla de nivel, distintas semillas de fantasmas) con el jugador automático descrito arriba. Es una referencia relativa: el bot ve a todos los fantasmas, pero no usa linterna ni sonar, y una persona real tendrá más información y más errores.
-
-| Modo | N0 | N1 | N2 | N3 | N4 | N5 |
-| --- | --- | --- | --- | --- | --- | --- |
-| Aprendiz | 6 | 5 | 5 | 3 | 6 | 5 |
-| Normal | 6 | 5 | 3 | 1 | 2 | 4 |
-| Pesadilla | 4 | 2 | 1 | 1 | 1 | 0 |
-| Muerte súbita | 1 | 0 | 0 | 0 | 0 | 0 |
+| Aprendiz | 6 | 6 | 5 | 4 | 5 | 5 |
+| Normal | 6 | 4 | 2 | 0 | 3 | 0 |
+| Pesadilla | 3 | 0 | 0 | 0 | 0 | 0 |
+| Muerte súbita | 0 | 0 | 0 | 0 | 0 | 0 |
 
 ### Arquitectura
 

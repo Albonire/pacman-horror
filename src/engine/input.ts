@@ -75,16 +75,17 @@ export class Input {
   requestLock(): void {
     if (this.mode === "keyboard" || this.locked) return;
     const el = this.el as HTMLElement & { requestPointerLock: (o?: { unadjustedMovement?: boolean }) => Promise<void> | void };
+    const swallow = (r: unknown): void => { if (r && typeof (r as Promise<void>).catch === "function") (r as Promise<void>).catch(() => { /* sin gesto del usuario: se pedira de nuevo con un clic */ }); };
     try {
       const r = el.requestPointerLock({ unadjustedMovement: true });
       if (r && typeof (r as Promise<void>).catch === "function") {
         (r as Promise<void>).catch(() => {
           // sin movimiento crudo: reintento normal
-          try { void el.requestPointerLock(); } catch { /* noop */ }
+          try { swallow(el.requestPointerLock()); } catch { /* noop */ }
         });
       }
     } catch {
-      try { void el.requestPointerLock(); } catch { /* noop */ }
+      try { swallow(el.requestPointerLock()); } catch { /* noop */ }
     }
   }
 
