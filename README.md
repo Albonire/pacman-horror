@@ -89,6 +89,17 @@ npm run smoke      # prueba E2E sobre dist/ (requiere `npm run build` y Chromium
 
 `CHROME_PATH` permite elegir el ejecutable de Chromium para el script de humo.
 
+### Calibración con el bot
+
+Partidas completadas de 6 (misma semilla de nivel, distintas semillas de fantasmas) con el jugador automático descrito arriba. Es una referencia relativa: el bot ve a todos los fantasmas, pero no usa linterna ni sonar, y una persona real tendrá más información y más errores.
+
+| Modo | N0 | N1 | N2 | N3 | N4 | N5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Aprendiz | 6 | 5 | 5 | 3 | 6 | 5 |
+| Normal | 6 | 5 | 3 | 1 | 2 | 4 |
+| Pesadilla | 4 | 2 | 1 | 1 | 1 | 0 |
+| Muerte súbita | 1 | 0 | 0 | 0 | 0 | 0 |
+
 ### Arquitectura
 
 ```
