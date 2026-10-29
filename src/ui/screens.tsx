@@ -32,7 +32,7 @@ export function WarningScreen({ onContinue, onReduced }: { onContinue: () => voi
     <Screen variant="solid">
       <div className="panel fade-in" style={{ maxWidth: 640, textAlign: "center" }}>
         <div className="kicker red">ADVERTENCIA</div>
-        <h2 className="h2" style={{ margin: "14px 0 18px", color: "#ff8f7a" }}>CONTENIDO DE TERROR</h2>
+        <h2 className="h2" style={{ margin: "14px 0 18px", color: "#ff9684" }}>CONTENIDO DE TERROR</h2>
         <p className="p">
           Este juego contiene luces parpadeantes, sonidos fuertes, sustos repentinos y efectos de imagen intensos.
           Puede no ser adecuado para personas con fotosensibilidad o con sensibilidad al miedo.
@@ -60,10 +60,7 @@ export function MainMenu({
           <h1 className="h1 title-pac" style={{ margin: 0 }}>PAC·MAN</h1>
           <h2 className="h1 title-umbral" style={{ margin: "6px 0 0" }}>UMBRAL</h2>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }} aria-hidden="true">
-          <PacIcon size={34} />
-          {[0, 1, 2, 3, 4].map((i) => <span key={i} style={{ width: 8, height: 8, background: "#ffd24a", borderRadius: 4, opacity: 0.85 - i * 0.14 }} />)}
-        </div>
+        <div aria-hidden="true"><PacIcon size={40} color="#f0cf3c" /></div>
         <p className="p" style={{ maxWidth: 520 }}>
           Eres Pac-Man. Algo te ha traído a un lugar que no debería existir. Devora cada nodo para abrir la salida,
           pero ellos ya saben dónde estás, y esta vez ellos son los que dan miedo.
@@ -89,8 +86,8 @@ export function DifficultyCards({ selected, onSelect }: { selected: DifficultyId
         const d = DIFFICULTIES[id];
         return (
           <button key={id} type="button" className={`card ${selected === id ? "card-sel" : ""}`} onClick={() => onSelect(id)} aria-pressed={selected === id}>
-            <div style={{ fontSize: 15, letterSpacing: "0.24em", color: id === "oneLife" || id === "nightmare" ? "#ff8f86" : "var(--pac)" }}>{d.label}</div>
-            <div className="p" style={{ marginTop: 8, fontSize: 12 }}>{d.tagline}</div>
+            <div style={{ letterSpacing: "0.2em", fontFamily: "var(--display)", fontSize: 21, color: id === "oneLife" || id === "nightmare" ? "#ff8f7e" : "var(--pac)" }}>{d.label}</div>
+            <div className="p" style={{ marginTop: 8, fontSize: 14 }}>{d.tagline}</div>
             <div className="kicker" style={{ marginTop: 10 }}>PUNTOS ×{d.scoreMult}</div>
           </button>
         );
@@ -135,8 +132,8 @@ export function LevelSelectScreen({
             return (
               <button key={lv.id} type="button" className="card" disabled={locked} onClick={() => onPick(lv.id)}>
                 <div className="kicker">{lv.subtitle}</div>
-                <div style={{ fontSize: 16, letterSpacing: "0.18em", margin: "6px 0 6px", color: locked ? "var(--dim)" : "var(--pac)" }}>{locked ? "???" : lv.name}</div>
-                <div className="p" style={{ fontSize: 11 }}>{locked ? "Supera el nivel anterior para desbloquearlo." : `${lv.ghosts} entidades · ${lv.W}×${lv.H}`}</div>
+                <div style={{ fontFamily: "var(--display)", fontSize: 21, letterSpacing: "0.14em", margin: "6px 0 6px", color: locked ? "var(--bone-faint)" : "var(--pac)" }}>{locked ? "???" : lv.name}</div>
+                <div className="p" style={{ fontSize: 14 }}>{locked ? "Supera el nivel anterior para desbloquearlo." : `${lv.ghosts} entidades · ${lv.W}×${lv.H}`}</div>
                 {!locked && best > 0 && <div className="kicker ok" style={{ marginTop: 8 }}>MEJOR {pad(best)}</div>}
               </button>
             );
@@ -154,7 +151,7 @@ export function ControlsList() {
   const rows: [ReactNode, string][] = [
     [<><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></>, "Moverse (relativo a hacia dónde miras)"],
     [<>Ratón</>, "Mirar. Haz clic para capturar el ratón"],
-    [<><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd></>, "Adelante / atrás / lateral (en modo teclado, ← → giran)"],
+    [<>Flechas</>, "Adelante / atrás / lateral (en modo teclado, izquierda y derecha giran)"],
     [<><kbd>Q</kbd> <kbd>E</kbd></>, "Girar la vista con el teclado"],
     [<><kbd>Shift</kbd></>, "Correr (gasta aliento; los fantasmas te oyen)"],
     [<><kbd>Espacio</kbd> / clic dcho.</>, "Ecolocalización: mapa y entidades (mantener, frena)"],
@@ -183,7 +180,7 @@ export function ControlsScreen({ onBack }: { onBack: () => void }) {
         <div className="kicker">CÓMO SOBREVIVIR</div>
         <h2 className="h2" style={{ margin: "8px 0 14px" }}>CONTROLES</h2>
         <ControlsList />
-        <div className="p" style={{ marginTop: 16, fontSize: 12 }}>
+        <div className="p" style={{ marginTop: 16, fontSize: 14 }}>
           Devora todos los nodos para abrir la salida. Los orbes grandes te dan poder: los fantasmas huyen y puedes comértelos.
           El Estático solo se congela mientras lo miras con luz.
         </div>
@@ -207,14 +204,14 @@ export function SettingsPanel({
         <Slider label="Sensibilidad del ratón" value={settings.sensitivity} min={0.2} max={3} step={0.05} onChange={(v) => set("sensitivity", v)} format={(v) => v.toFixed(2)} />
         <Toggle label="Invertir eje vertical" value={settings.invertY} onChange={(v) => set("invertY", v)} />
         <Seg label="Control" value={settings.controlMode} options={[{ value: "mouse", label: "RATÓN + TECLADO" }, { value: "keyboard", label: "SOLO TECLADO" }]} onChange={(v) => set("controlMode", v)} />
-        <Slider label="Campo de visión" value={settings.fov} min={60} max={105} step={1} onChange={(v) => set("fov", v)} format={(v) => `${v}°`} />
+        <Slider label="Campo de visión (horizontal)" value={settings.fov} min={70} max={110} step={1} onChange={(v) => set("fov", v)} format={(v) => `${v}°`} />
         <Slider label="Volumen" value={settings.volume} min={0} max={1} step={0.05} onChange={(v) => set("volume", v)} format={(v) => `${Math.round(v * 100)}%`} />
         <Slider label="Brillo" value={settings.brightness} min={0.7} max={1.7} step={0.05} onChange={(v) => set("brightness", v)} format={(v) => v.toFixed(2)} />
         <Seg label="Sustos" value={settings.scares} options={[{ value: "full", label: "COMPLETOS" }, { value: "reduced", label: "REDUCIDOS" }, { value: "off", label: "SIN PANTALLA" }]} onChange={(v) => set("scares", v)} />
         <Seg label="Calidad gráfica" value={settings.quality} options={[{ value: "high", label: "ALTA" }, { value: "medium", label: "MEDIA" }, { value: "low", label: "BAJA" }]} onChange={(v) => set("quality", v)} />
         <Toggle label="Balanceo de cámara" value={settings.headBob} onChange={(v) => set("headBob", v)} />
         <Toggle label="Silenciar todo" value={settings.muted} onChange={(v) => set("muted", v)} />
-        {inGame && <div className="p" style={{ marginTop: 10, fontSize: 11 }}>La calidad gráfica se aplica por completo al empezar el siguiente nivel.</div>}
+        {inGame && <div className="p" style={{ marginTop: 10, fontSize: 13 }}>La calidad gráfica se aplica por completo al empezar el siguiente nivel.</div>}
         <div style={{ marginTop: 20 }}><Btn autoFocus onClick={onBack}>LISTO</Btn></div>
       </div>
     </Screen>
@@ -232,7 +229,7 @@ export function BriefingScreen({
     <Screen variant="clear">
       <div style={{ width: "100%", maxWidth: 1100 }} className="fade-in">
         <div className="kicker">{level.subtitle}</div>
-        <h1 className="h1" style={{ fontSize: "clamp(34px, 6vw, 72px)", color: "var(--pac)", margin: "10px 0 14px", textShadow: "0 0 22px rgba(255,210,26,0.35)" }}>{level.name}</h1>
+        <h1 className="h1" style={{ fontSize: "clamp(34px, 6vw, 72px)", color: "var(--pac)", margin: "10px 0 14px", textShadow: "0 3px 14px #000, 0 0 40px rgba(196,39,27,0.35)" }}>{level.name}</h1>
         <p className="p" style={{ maxWidth: 560, fontStyle: "italic" }}>“{level.flavor}”</p>
         <div style={{ display: "flex", gap: 8, margin: "18px 0 8px", alignItems: "center" }}>
           {[0, 1, 2, 3].map((i) => (
@@ -286,9 +283,9 @@ const KILLERS = [
 export function GameOverScreen({ s, onRetry, onMenu }: { s: RunSummary; onRetry: () => void; onMenu: () => void }) {
   return (
     <Screen variant="solid">
-      <div className="panel fade-in" style={{ maxWidth: 560, borderColor: "rgba(255,59,48,0.45)" }}>
+      <div className="panel fade-in" style={{ maxWidth: 560 }}>
         <div className="kicker red">SEÑAL PERDIDA</div>
-        <h2 className="h1" style={{ fontSize: "clamp(32px, 6vw, 56px)", color: "var(--blood)", margin: "10px 0 12px", textShadow: "0 0 20px rgba(255,40,30,0.4)" }}>FIN DE LA PARTIDA</h2>
+        <h2 className="h1" style={{ fontSize: "clamp(32px, 6vw, 56px)", color: "var(--blood)", margin: "10px 0 12px", textShadow: "0 3px 12px #000, 0 0 36px rgba(196,39,27,0.6)" }}>FIN DE LA PARTIDA</h2>
         <p className="p">{s.caughtBy !== null ? KILLERS[s.caughtBy] : "Te alcanzaron."} El laberinto no recuerda a quienes se quedan.</p>
         <div style={{ margin: "18px 0" }}>
           <Stat label="NIVEL" value={s.levelName} />
@@ -311,7 +308,7 @@ export function LevelClearScreen({ s, onNext, onMenu }: { s: RunSummary; onNext:
   const next = CAMPAIGN[Math.min(CAMPAIGN.length - 1, s.levelIndex + 1)];
   return (
     <Screen variant="solid">
-      <div className="panel fade-in" style={{ maxWidth: 560, borderColor: "rgba(77,255,136,0.4)" }}>
+      <div className="panel fade-in" style={{ maxWidth: 560 }}>
         <div className="kicker ok">BRECHA CRUZADA</div>
         <h2 className="h1" style={{ fontSize: "clamp(30px, 5.5vw, 52px)", color: "var(--ok)", margin: "10px 0 12px" }}>NIVEL SUPERADO</h2>
         <p className="p">Más abajo hay otra ala del laberinto. Las luces parpadean más rápido.</p>
@@ -336,10 +333,10 @@ export function LevelClearScreen({ s, onNext, onMenu }: { s: RunSummary; onNext:
 export function VictoryScreen({ s, onMenu }: { s: RunSummary; onMenu: () => void }) {
   return (
     <Screen variant="solid">
-      <div className="panel fade-in" style={{ maxWidth: 620, borderColor: "rgba(255,210,26,0.5)", textAlign: "center" }}>
+      <div className="panel fade-in" style={{ maxWidth: 620, textAlign: "center" }}>
         <div style={{ display: "flex", justifyContent: "center" }}><PacIcon size={64} /></div>
         <div className="kicker ok" style={{ marginTop: 14 }}>EL HAMBRE CESA</div>
-        <h2 className="h1" style={{ fontSize: "clamp(34px, 6vw, 60px)", color: "var(--pac)", margin: "10px 0 14px", textShadow: "0 0 24px rgba(255,210,26,0.4)" }}>HAS ESCAPADO</h2>
+        <h2 className="h1" style={{ fontSize: "clamp(34px, 6vw, 60px)", color: "var(--pac)", margin: "10px 0 14px", textShadow: "0 3px 12px #000, 0 0 40px rgba(240,207,60,0.3)" }}>HAS ESCAPADO</h2>
         <p className="p">Cruzas la última puerta. Fuera, el zumbido de 60 Hz por fin se apaga. Pero Pac-Man nunca deja de tener hambre.</p>
         <div style={{ margin: "18px 0", textAlign: "left" }}>
           <Stat label="DIFICULTAD" value={DIFFICULTIES[s.difficulty].label} />

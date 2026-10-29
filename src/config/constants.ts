@@ -27,7 +27,7 @@ export const BATTERY_STARE_DRAIN = 5; // extra mientras el Estatico esta congela
 // ---------------- Fantasmas ----------------
 export const GHOST_RADIUS = 0.5;
 export const GHOST_CATCH_DIST = 0.82; // distancia centro a centro que cuenta como atrapado
-export const GHOST_SPEED_BASE = 1.25; // celdas/s
+export const GHOST_SPEED_BASE = 1.2; // celdas/s
 export const GHOST_FRIGHT_FACTOR = 0.55;
 export const GHOST_EATEN_SPEED = 3.4; // celdas/s
 export const GHOST_TUNNEL_FACTOR = 0.7;

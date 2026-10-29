@@ -102,6 +102,30 @@ const FinalShader = {
   `,
 };
 
+/**
+ * Pasada de saneamiento antes del bloom: un solo pixel NaN o infinito (HDR en half float) se
+ * propaga por el desenfoque y deja toda la pantalla negra o plana. Aqui se descarta y se acota.
+ */
+const SanitizeShader = {
+  name: "SanitizeShader",
+  uniforms: { tDiffuse: { value: null as THREE.Texture | null } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    varying vec2 vUv;
+    void main(){
+      vec4 c = texture2D(tDiffuse, vUv);
+      bool bad = any(isnan(c.rgb)) || any(isinf(c.rgb));
+      vec3 rgb = bad ? vec3(0.0) : clamp(c.rgb, 0.0, 24.0);
+      gl_FragColor = vec4(rgb, 1.0);
+    }
+  `,
+};
+
+export function makeSanitizePass(): ShaderPass {
+  return new ShaderPass(SanitizeShader);
+}
+
 export function makeFinalPass(): ShaderPass {
   const p = new ShaderPass(FinalShader);
   return p;

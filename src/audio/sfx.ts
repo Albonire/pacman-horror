@@ -141,7 +141,12 @@ export function wrap(S: Synth): void {
   S.tone({ f0: 70, f1: 36, dur: 0.6, vol: 0.3 });
 }
 
-/** Grito mortal: voz con formantes + rafaga de ruido + impacto grave + chirrido de cuerdas. */
+/**
+ * Grito mortal, sincronizado con la embestida (el destello blanco llega a ~0,44 s):
+ * 1) tension ascendente (cuerdas que suben y aire que se infla) mientras el fantasma se lanza,
+ * 2) impacto grave + el grito en coro (voz principal, octava inferior y tres voces desafinadas),
+ * 3) chillido ametrallado (AM rapida) y 4) corte seco con acufeno y latidos.
+ */
 export function deathScream(S: Synth, kind: number): void {
   const P = [
     { f0: 360, f1: 1500, formants: [[700, 6, 1], [1250, 8, 0.9], [2600, 9, 0.6]] as [number, number, number][], growl: true },
@@ -149,15 +154,58 @@ export function deathScream(S: Synth, kind: number): void {
     { f0: 880, f1: 3200, formants: [[1100, 8, 1], [2400, 10, 0.9], [4200, 12, 0.7]] as [number, number, number][], growl: false },
     { f0: 300, f1: 1300, formants: [[600, 5, 1], [1500, 8, 0.8], [3000, 9, 0.7]] as [number, number, number][], growl: true },
   ][kind % 4];
-  S.formantVoice({ f0: P.f0, f1: P.f1, dur: 1.3, vol: 0.62, a: 0.02, formants: P.formants, dist: true, vibRate: 14, vibDepth: 55, noiseMix: 0.18, send: 0.35 });
-  S.formantVoice({ f0: P.f0 * 0.5, f1: P.f1 * 0.52, dur: 1.2, vol: 0.38, a: 0.03, formants: P.formants, dist: true, vibRate: 9, vibDepth: 70, send: 0.3 });
-  if (P.growl) S.formantVoice({ f0: 62, f1: 40, dur: 1.4, vol: 0.5, formants: [[260, 4, 1], [800, 6, 0.6]], dist: true, vibRate: 32, vibDepth: 90, noiseMix: 0.3 });
-  S.noise({ hp: 700, dur: 1.0, vol: 0.45, a: 0.004, send: 0.3 });
-  S.noise({ kind: "brown", lp: 220, dur: 0.9, vol: 0.7, a: 0.004 });
-  S.tone({ f0: 72, f1: 24, dur: 1.2, vol: 0.9, a: 0.004 });
-  for (let i = 0; i < 5; i++) S.tone({ type: "sawtooth", f0: 680 + i * 11, f1: 1180 + i * 17, dur: 1.0, vol: 0.05, lp: 3200, a: 0.03, detune: (i - 2) * 9, send: 0.4 });
-  if (kind === 2) { S.tone({ f0: 3400, dur: 1.2, vol: 0.06 }); S.tone({ f0: 3470, dur: 1.2, vol: 0.06 }); }
-  if (kind === 3) S.noise({ bp: 2200, q: 0.5, dur: 1.2, vol: 0.4, a: 0.01 });
+  const t0 = S.now;
+  const hit = t0 + 0.42;
+  const dur = 1.45;
+
+  // 1) crescendo previo
+  S.noise({ kind: "pink", bp: 300, bp1: 4200, q: 1.4, dur: 0.42, a: 0.4, vol: 0.5, t: t0, send: 0.2 });
+  for (let i = 0; i < 4; i++) S.tone({ type: "sawtooth", f0: 220 * (1 + i * 0.12), f1: 880 * (1 + i * 0.12), t: t0, dur: 0.44, a: 0.4, vol: 0.06, lp: 2600, detune: (i - 1.5) * 14, send: 0.4 });
+  S.tone({ f0: 50, f1: 110, t: t0, dur: 0.44, a: 0.4, vol: 0.35, lp: 200 });
+
+  // 2) impacto + coro de gritos
+  S.tone({ f0: 74, f1: 22, t: hit, dur: 1.3, vol: 1.0, a: 0.003 });
+  S.noise({ kind: "brown", lp: 240, t: hit, dur: 1.0, vol: 0.8, a: 0.003 });
+  S.noise({ hp: 700, t: hit, dur: 1.1, vol: 0.5, a: 0.003, send: 0.3 });
+  S.formantVoice({ t: hit, f0: P.f0, f1: P.f1, dur, vol: 0.66, a: 0.015, formants: P.formants, dist: true, vibRate: 14, vibDepth: 55, noiseMix: 0.2, send: 0.35 });
+  S.formantVoice({ t: hit, f0: P.f0 * 0.5, f1: P.f1 * 0.52, dur: dur * 0.95, vol: 0.4, a: 0.03, formants: P.formants, dist: true, vibRate: 9, vibDepth: 70, send: 0.3 });
+  for (let i = 0; i < 3; i++) {
+    const d = (i + 1) * 0.035;
+    S.formantVoice({ t: hit + d, f0: P.f0 * (0.9 + i * 0.13), f1: P.f1 * (0.8 + i * 0.17), dur: dur * (0.85 - i * 0.05), vol: 0.3, a: 0.03, formants: P.formants, dist: true, vibRate: 11 + i * 3, vibDepth: 80, noiseMix: 0.15, send: 0.5 });
+  }
+  if (P.growl) S.formantVoice({ t: hit, f0: 62, f1: 38, dur: 1.5, vol: 0.55, formants: [[260, 4, 1], [800, 6, 0.6]], dist: true, vibRate: 32, vibDepth: 90, noiseMix: 0.3 });
+
+  // 3) chillido ametrallado: portadora aguda con amplitud modulada a 60-80 Hz
+  const ctx = S.ctx;
+  const car = ctx.createOscillator(); car.type = "sawtooth";
+  car.frequency.setValueAtTime(2000, hit); car.frequency.exponentialRampToValueAtTime(3600, hit + dur * 0.8);
+  const am = ctx.createOscillator(); am.frequency.value = 66;
+  const amg = ctx.createGain(); amg.gain.value = 0.5;
+  const shaper = ctx.createGain(); shaper.gain.value = 0.5;
+  am.connect(amg); amg.connect(shaper.gain);
+  const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 3000; bp.Q.value = 1.2;
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0.0001, hit); env.gain.linearRampToValueAtTime(0.12 * S.trim, hit + 0.04); env.gain.exponentialRampToValueAtTime(0.0001, hit + dur * 0.9);
+  car.connect(shaper); shaper.connect(bp); bp.connect(env); S.out(env, S.sfx, 0.3);
+  car.start(hit); am.start(hit); car.stop(hit + dur); am.stop(hit + dur);
+  for (let i = 0; i < 5; i++) S.tone({ type: "sawtooth", f0: 680 + i * 11, f1: 1180 + i * 17, t: hit, dur: 1.0, vol: 0.05, lp: 3200, a: 0.03, detune: (i - 2) * 9, send: 0.4 });
+  if (kind === 2) { S.tone({ f0: 3400, t: hit, dur: 1.2, vol: 0.06 }); S.tone({ f0: 3470, t: hit, dur: 1.2, vol: 0.06 }); }
+  if (kind === 3) S.noise({ bp: 2200, q: 0.5, t: hit, dur: 1.2, vol: 0.4, a: 0.01 });
+
+  // 4) corte seco -> acufeno y latidos
+  const tail = hit + dur + 0.05;
+  S.tone({ f0: 4300, t: tail, dur: 1.4, vol: 0.05, a: 0.02 });
+  S.tone({ f0: 4390, t: tail, dur: 1.2, vol: 0.03, a: 0.02 });
+  for (let i = 0; i < 3; i++) S.tone({ f0: 56, f1: 36, t: tail + 0.2 + i * 0.62, dur: 0.2, vol: 0.45 - i * 0.1, lp: 160, a: 0.012 });
+}
+
+/** Golpe de susto sincronizado con cada destello de la cara: acorde disonante, aire y sub-grave. */
+export function scareHit(S: Synth, strength: number): void {
+  const s = Math.max(0.3, Math.min(1.3, strength));
+  [233.1, 246.9, 277.2, 349.2, 370].forEach((f, i) => S.tone({ type: "sawtooth", f0: f * 2, f1: f * 1.9, dur: 0.32, vol: 0.07 * s, lp: 3000, a: 0.002, detune: (i - 2) * 11, send: 0.3 }));
+  S.noise({ hp: 900, dur: 0.22, vol: 0.55 * s, a: 0.002 });
+  S.tone({ f0: 80, f1: 26, dur: 0.45, vol: 0.9 * s, a: 0.002 });
+  S.tone({ type: "square", f0: 3100, f1: 1200, dur: 0.12, vol: 0.05 * s, a: 0.002 });
 }
 
 export function gameOver(S: Synth): void {
@@ -227,9 +275,11 @@ export function blackout(S: Synth, on: boolean): void {
 }
 
 export function screamerFlash(S: Synth): void {
-  S.noise({ hp: 1100, dur: 0.38, vol: 0.5, a: 0.002 });
-  S.formantVoice({ f0: 1900, f1: 3300, dur: 0.34, vol: 0.4, a: 0.005, formants: [[1500, 8, 1], [3000, 10, 0.8]], dist: true, send: 0.2 });
-  S.tone({ f0: 66, f1: 28, dur: 0.5, vol: 0.8, a: 0.002 });
+  S.noise({ hp: 1100, dur: 0.42, vol: 0.55, a: 0.002 });
+  S.formantVoice({ f0: 1900, f1: 3300, dur: 0.38, vol: 0.45, a: 0.005, formants: [[1500, 8, 1], [3000, 10, 0.8]], dist: true, send: 0.2 });
+  S.formantVoice({ f0: 640, f1: 1500, dur: 0.4, vol: 0.4, a: 0.005, formants: [[900, 7, 1], [1900, 9, 0.9]], dist: true, vibRate: 16, vibDepth: 60, send: 0.3 });
+  [233.1, 246.9, 311.1].forEach((f, i) => S.tone({ type: "sawtooth", f0: f * 2, dur: 0.4, vol: 0.06, lp: 2800, a: 0.003, detune: (i - 1) * 12 }));
+  S.tone({ f0: 66, f1: 24, dur: 0.6, vol: 0.9, a: 0.002 });
 }
 
 export function heartbeat(S: Synth, strength: number): void {

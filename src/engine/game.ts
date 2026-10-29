@@ -26,7 +26,7 @@ import { LevelView } from "./levelView";
 import { sharedUniforms } from "./materials";
 import { PacManBody, PovJaws } from "./pacman";
 import { ParticlePool } from "./particles";
-import { applyFx, defaultFx, makeFinalPass, type FxState } from "./postfx";
+import { applyFx, defaultFx, makeFinalPass, makeSanitizePass, type FxState } from "./postfx";
 import { FruitView } from "./props";
 import { Radar } from "./radar";
 import { CameraRig } from "./rig";
@@ -104,6 +104,9 @@ export class Game {
   private headTarget = new THREE.Object3D();
   private headDist = 6;
   private perf = { t: 0, sum: 0, n: 0, checks: 0 };
+  private sizeW = 0;
+  private sizeH = 0;
+  private sizeDpr = 1;
   private glow = new THREE.PointLight(0xffd23a, 2.2, 5, 2);
   private ghostLights: THREE.PointLight[] = [];
   private pelletLight = new THREE.PointLight(0xffa22e, 0, 9, 2);
@@ -114,6 +117,10 @@ export class Game {
   private disposed = false;
   private manual: boolean;
   private resizeObs: ResizeObserver;
+  private onWindowResize = () => this.onResize();
+  private onContextLost = (e: Event) => { e.preventDefault(); this.contextLost = true; if (this.phase === "playing") this.pause(); };
+  private onContextRestored = () => { this.contextLost = false; this.onResize(); this.hud.message("Se recupero la tarjeta grafica.", 3, "warn"); };
+  private contextLost = false;
   private onVisibility = () => { if (document.hidden && this.phase === "playing") this.pause(); };
 
   // estado de juego
@@ -183,6 +190,7 @@ export class Game {
     const target = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(this.renderer, target);
     this.composer.addPass(new RenderPass(this.scene, this.rig.camera));
+    this.composer.addPass(makeSanitizePass());
     const jawPass = new RenderPass(this.jaws.scene, this.jaws.camera);
     jawPass.clear = false;
     jawPass.clearDepth = true;
@@ -212,6 +220,9 @@ export class Game {
 
     this.resizeObs = new ResizeObserver(() => this.onResize());
     this.resizeObs.observe(this.container);
+    window.addEventListener("resize", this.onWindowResize);
+    this.renderer.domElement.addEventListener("webglcontextlost", this.onContextLost);
+    this.renderer.domElement.addEventListener("webglcontextrestored", this.onContextRestored);
     document.addEventListener("visibilitychange", this.onVisibility);
 
     this.applySettings(this.settings, false);
@@ -359,6 +370,7 @@ export class Game {
     this.scare.level = s.scares;
     const q = s.quality;
     const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    this.sizeDpr = dpr;
     const pr = Math.min(dpr, q === "high" ? 1.75 : q === "medium" ? 1.25 : 1);
     this.renderer.setPixelRatio(pr);
     this.composer.setPixelRatio(pr);
@@ -377,6 +389,9 @@ export class Game {
     cancelAnimationFrame(this.raf);
     this.resizeObs.disconnect();
     document.removeEventListener("visibilitychange", this.onVisibility);
+    window.removeEventListener("resize", this.onWindowResize);
+    this.renderer.domElement.removeEventListener("webglcontextlost", this.onContextLost);
+    this.renderer.domElement.removeEventListener("webglcontextrestored", this.onContextRestored);
     this.input.detach();
     this.audio.dispose();
     this.scare.dispose();
@@ -555,6 +570,7 @@ export class Game {
     const real = Math.min(0.1, raw);
     this.last = now;
     this.watchPerformance(raw);
+    this.checkSize();
     this.advance(real);
   };
 
@@ -619,7 +635,7 @@ export class Game {
     const z = sim.maze.cellToWorld(0, sim.maze.tunnelRow).z;
     const pos = new THREE.Vector3(this.attractX, K.EYE_H + Math.sin(this.time * 0.9) * 0.015, z + Math.sin(this.time * 0.31) * 0.25);
     const tgt = new THREE.Vector3(this.attractX + 6, K.EYE_H + 0.05 + Math.sin(this.time * 0.4) * 0.05, z + Math.sin(this.time * 0.2) * 0.5);
-    this.rig.override = { pos, target: tgt, fov: this.settings.fov, roll: Math.sin(this.time * 0.5) * 0.01 };
+    this.rig.override = { pos, target: tgt, fov: this.rig.vfov(this.settings.fov), roll: Math.sin(this.time * 0.5) * 0.01 };
     this.view!.update({ time: this.time, dt, playerX: pos.x, playerZ: pos.z, lightsMul: 1, powered: false, exitUnlocked: false });
     if (this.phase === "menu" || this.phase === "briefing" || this.phase === "loading") this.audio.update(this.audioFrame(0));
   }
@@ -635,9 +651,11 @@ export class Game {
     const look = this.input.consumeLook();
     const sens = 0.0021 * this.settings.sensitivity;
     const yaw0 = p.yaw, pitch0 = this.rig.pitch;
-    p.yaw -= look.dx * sens;
+    if (!Number.isFinite(p.yaw)) p.yaw = 0;
+    if (!Number.isFinite(this.rig.pitch)) this.rig.pitch = 0;
+    p.yaw -= (Number.isFinite(look.dx) ? look.dx : 0) * sens;
     p.yaw += axes.turn * 2.3 * dt;
-    this.rig.pitch -= look.dy * sens * (this.settings.invertY ? -1 : 1);
+    this.rig.pitch -= (Number.isFinite(look.dy) ? look.dy : 0) * sens * (this.settings.invertY ? -1 : 1);
     this.rig.pitch += axes.lookV * 1.5 * dt;
     this.rig.pitch = clamp(this.rig.pitch, -1.25, 1.25);
     this.yawVel += ((p.yaw - yaw0) / Math.max(dt, 1e-3) - this.yawVel) * Math.min(1, dt * 12);
@@ -1095,6 +1113,7 @@ export class Game {
       chasing: sim.ghosts.some((g) => g.mode === "chase"),
       sonar: p.sonarOpen,
       theme: sim.level.theme,
+      dread: (this.settings.scares === "full" ? 1 : this.settings.scares === "reduced" ? 0.6 : 0.35) * (this.run ? DIFFICULTIES[this.run.diff].ambientScares : 1),
       ghosts: sim.ghosts.map((g) => ({
         kind: g.kind, x: g.x, y: 1.4, z: g.z, mode: g.mode, frozen: g.frozen, startled: g.startled,
         dist: Math.hypot(g.x - p.x, g.z - p.z),
@@ -1103,6 +1122,7 @@ export class Game {
   }
 
   private render(dt: number): void {
+    if (this.contextLost) return;
     const sim = this.sim;
     if (sim && (this.phase === "playing" || this.phase === "levelclear" || this.phase === "victory")) {
       this.audio.update(this.audioFrame(dt));
@@ -1117,10 +1137,24 @@ export class Game {
 
   private onResize(): void {
     const w = Math.max(2, this.container.clientWidth), h = Math.max(2, this.container.clientHeight);
-    this.renderer.setSize(w, h);
+    this.sizeW = w; this.sizeH = h;
+    // el lienzo se estira por CSS al 100 % del contenedor: aunque se pierda un evento de tamano nunca queda recortado
+    this.renderer.setSize(w, h, false);
+    const cs = this.renderer.domElement.style;
+    cs.width = "100%"; cs.height = "100%";
     this.composer.setSize(w, h);
     this.rig.setAspect(w / h);
     this.jaws.setAspect(w / h);
+  }
+
+  /** Red de seguridad: ResizeObserver puede no avisar en iframes o al cambiar de monitor. */
+  private checkSize(): void {
+    const w = Math.max(2, this.container.clientWidth), h = Math.max(2, this.container.clientHeight);
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    if (w !== this.sizeW || h !== this.sizeH || dpr !== this.sizeDpr) {
+      if (dpr !== this.sizeDpr) { this.sizeDpr = dpr; this.applySettings(this.settings, false); }
+      else this.onResize();
+    }
   }
 
   private setPhase(p: Phase): void {

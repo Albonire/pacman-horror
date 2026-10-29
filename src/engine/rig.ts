@@ -13,7 +13,8 @@ export class CameraRig {
   readonly camera: THREE.PerspectiveCamera;
   mode: CamMode = "fp";
   pitch = 0;
-  baseFov = 78;
+  /** Campo de vision HORIZONTAL en grados (ajuste del usuario); se convierte a vertical segun la relacion de aspecto. */
+  baseFov = 90;
   /** 0..1 */
   trauma = 0;
   roll = 0;
@@ -30,13 +31,22 @@ export class CameraRig {
   headBob = true;
 
   constructor(aspect: number) {
-    this.camera = new THREE.PerspectiveCamera(this.baseFov, aspect, 0.06, 140);
+    this.camera = new THREE.PerspectiveCamera(60, aspect, 0.06, 140);
+    this.camera.fov = this.vfov(this.baseFov);
+    this.camera.updateProjectionMatrix();
     this.camera.rotation.order = "YXZ";
   }
 
   addTrauma(t: number): void { this.trauma = Math.min(1, this.trauma + t); }
 
   setAspect(a: number): void { this.camera.aspect = a; this.camera.updateProjectionMatrix(); }
+
+  /** FOV vertical equivalente a uno horizontal. Una pantalla 16:9 con 78 grados verticales daba ~110 horizontales (efecto ojo de pez). */
+  vfov(hDeg: number): number {
+    const a = Math.max(0.5, this.camera.aspect);
+    const v = (2 * Math.atan(Math.tan((hDeg * Math.PI) / 360) / a) * 180) / Math.PI;
+    return Math.max(35, Math.min(95, v));
+  }
 
   update(dt: number, p: PlayerSim, maze: Maze, opts: { exertion: number; tension: number; frozen: boolean }): void {
     this.time += dt;
@@ -86,7 +96,7 @@ export class CameraRig {
     }
 
     // FOV: base + correr - tension + golpe
-    const fov = this.baseFov + (p.running ? 7 : 0) - opts.tension * 4 + this.fovPunch;
+    const fov = this.vfov(this.baseFov + (p.running ? 6 : 0) - opts.tension * 3 + this.fovPunch);
     if (Math.abs(cam.fov - fov) > 0.01) {
       cam.fov += (fov - cam.fov) * Math.min(1, dt * 7);
       cam.updateProjectionMatrix();

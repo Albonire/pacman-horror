@@ -27,7 +27,7 @@ export function Btn({
 }
 
 /** Pac-Man animado (SVG) con la boca abriendose y cerrandose. */
-export function PacIcon({ size = 28, color = "#ffd21a", glow = true }: { size?: number; color?: string; glow?: boolean }) {
+export function PacIcon({ size = 28, color = "#f0cf3c", glow = true }: { size?: number; color?: string; glow?: boolean }) {
   const open = "M50 50 L93.3 22 A50 50 0 1 0 93.3 78 Z";
   const closed = "M50 50 L99.8 47 A50 50 0 1 0 99.8 53 Z";
   return (

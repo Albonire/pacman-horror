@@ -2,6 +2,7 @@
 
 import type { ThemeId } from "../config/campaign";
 import { Ambience, THEME_AUDIO } from "./ambience";
+import { Dread, type DreadKind } from "./dread";
 import { Drone, Siren } from "./music";
 import * as fx from "./sfx";
 import { Synth } from "./synth";
@@ -13,8 +14,8 @@ import { BreathEngine, GhostVoice } from "./voices";
  * (el compresor del bus maestro aporta ganancia de compensacion, asi que los transitorios suben mucho).
  */
 const MIX = {
-  waka: 0.4, step: 0.6, bite: 0.26, ghostEaten: 0.32, pellet: 0.5, heartbeat: 0.75, scream: 0.55,
-  screamerFlash: 0.3, flashlight: 0.6, fruit: 0.5, wake: 0.6, pant: 1.1,
+  waka: 0.4, step: 0.6, bite: 0.26, ghostEaten: 0.32, pellet: 0.5, heartbeat: 0.75, scream: 0.4,
+  screamerFlash: 0.3, scareHit: 0.4, dread: 0.6, flashlight: 0.6, fruit: 0.5, wake: 0.6, pant: 1.1,
 } as const;
 
 export class HorrorAudio implements GameAudio {
@@ -25,6 +26,7 @@ export class HorrorAudio implements GameAudio {
   private ambience: Ambience | null = null;
   private drone: Drone | null = null;
   private siren: Siren | null = null;
+  private dread: Dread | null = null;
   private breath = new BreathEngine();
   private voices = new Map<number, GhostVoice>();
   private suspended = false;
@@ -56,6 +58,7 @@ export class HorrorAudio implements GameAudio {
     this.ambience = new Ambience(S, this.theme);
     this.drone = new Drone(S, ta.droneRoot);
     this.siren = new Siren(S);
+    this.dread = new Dread(S);
   }
 
   setVolume(v: number): void { this.volume = v; this.S?.setVolume(v); }
@@ -80,6 +83,7 @@ export class HorrorAudio implements GameAudio {
     this.ambience?.update(f.dt);
     this.drone?.update(f.tension);
     this.siren?.update(f.dt, { progress: f.progress, chasing: f.chasing, tension: f.tension, powered: f.powered, powerLow: f.powerLow });
+    this.dread?.update({ dt: f.dt, tension: f.tension, chasing: f.chasing, intensity: f.dread, listener: { x: f.listener.x, z: f.listener.z, fx: f.listener.fx, fz: f.listener.fz } });
     this.breath.update(S, f.dt, { exertion: f.exertion, tension: f.tension, running: f.running, exhausted: f.exhausted });
     for (const g of f.ghosts) {
       let v = this.voices.get(g.kind);
@@ -127,6 +131,10 @@ export class HorrorAudio implements GameAudio {
   playBlackout(on: boolean): void { this.with((S) => fx.blackout(S, on)); }
   playScreamerFlash(): void { this.with((S) => fx.screamerFlash(S), MIX.screamerFlash); }
   playHeartbeat(strength: number): void { this.with((S) => fx.heartbeat(S, strength), MIX.heartbeat); }
+  playScareHit(strength: number): void { this.with((S) => fx.scareHit(S, strength), MIX.scareHit); }
+  playDread(kind: string): void {
+    this.with((S) => this.dread?.play(kind as DreadKind, { dt: 0, tension: 0, chasing: false, intensity: 1, listener: { x: S.ctx.listener.positionX?.value ?? 0, z: S.ctx.listener.positionZ?.value ?? 0, fx: S.ctx.listener.forwardX?.value ?? 0, fz: S.ctx.listener.forwardZ?.value ?? -1 } }), MIX.dread);
+  }
 
   dispose(): void {
     for (const v of this.voices.values()) v.dispose();
@@ -134,6 +142,7 @@ export class HorrorAudio implements GameAudio {
     this.ambience?.stop(0.1);
     this.drone?.dispose();
     this.siren?.dispose();
+    this.dread?.dispose();
     const S = this.S;
     this.S = null;
     if (S) void S.ctx.close();

@@ -9,7 +9,7 @@ export type ControlMode = "mouse" | "keyboard";
 export interface Settings {
   sensitivity: number; // 0.3 .. 2.5
   invertY: boolean;
-  fov: number; // 60 .. 100
+  fov: number; // horizontal, 70 .. 110
   volume: number; // 0 .. 1
   scares: ScareLevel;
   headBob: boolean;
@@ -22,7 +22,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   sensitivity: 1,
   invertY: false,
-  fov: 78,
+  fov: 90,
   volume: 0.8,
   scares: "full",
   headBob: true,
@@ -78,7 +78,7 @@ export function sanitizeSettings(s: Settings): Settings {
   return {
     ...s,
     sensitivity: clamp(Number(s.sensitivity) || 1, 0.2, 3),
-    fov: clamp(Number(s.fov) || 78, 55, 110),
+    fov: clamp(Number(s.fov) || 90, 60, 115),
     volume: clamp(Number.isFinite(Number(s.volume)) ? Number(s.volume) : 0.8, 0, 1),
     brightness: clamp(Number(s.brightness) || 1, 0.6, 1.8),
     scares: (["full", "reduced", "off"] as const).includes(s.scares) ? s.scares : "full",
@@ -87,7 +87,11 @@ export function sanitizeSettings(s: Settings): Settings {
   };
 }
 
-export function loadSettings(): Settings { return sanitizeSettings(read(SETTINGS_KEY, DEFAULT_SETTINGS)); }
+export function loadSettings(): Settings {
+  const s = read(SETTINGS_KEY, DEFAULT_SETTINGS);
+  if (s.fov === 78) s.fov = DEFAULT_SETTINGS.fov; // antiguo valor por defecto (era vertical)
+  return sanitizeSettings(s);
+}
 export function saveSettings(s: Settings): void { write(SETTINGS_KEY, s); }
 /** Descarta valores corruptos del almacenamiento (tipos erroneos, niveles fuera de rango). */
 export function sanitizeProgress(p: Progress, levelCount: number): Progress {

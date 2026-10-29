@@ -26,6 +26,9 @@ export class GhostSim {
   x = 0;
   z = 0;
   yaw = 0;
+  /** Desvio respecto a la rejilla mientras se abalanza sobre el jugador (se disipa solo). */
+  offX = 0;
+  offZ = 0;
 
   /** Cuenta atras (s) para despertar tras ser comido o al iniciar un intento. */
   wakeTimer = 0;
@@ -69,6 +72,8 @@ export class GhostSim {
     this.startled = false;
     this.awakeFor = 0;
     this.dash = 0;
+    this.offX = 0;
+    this.offZ = 0;
     // mira hacia un pasillo abierto
     let best: Cell = [0, 1];
     for (const d of DIRS) if (maze.isWalkable(this.cx + d[0], this.cy + d[1])) { best = d; break; }
@@ -102,6 +107,8 @@ export class GhostSim {
       this.x = a.x + (b.x - a.x) * this.p;
       this.z = a.z + (b.z - a.z) * this.p;
     }
+    this.x += this.offX;
+    this.z += this.offZ;
     this.yaw = Math.atan2(this.dx, this.dy);
   }
 

@@ -4,7 +4,7 @@
 import * as K from "../config/constants";
 import type { DifficultyDef } from "../config/difficulty";
 import type { LevelDef } from "../config/campaign";
-import { type AABB, depenetrate } from "./collision";
+import { type AABB, depenetrate, moveAndSlide } from "./collision";
 import type { SimEvent } from "./events";
 import {
   GhostSim, chaseTarget, chooseFlee, chooseToward,
@@ -37,6 +37,10 @@ const STARTLE_DIST = 3.6;
 const STARTLE_DELAY = 0.9;
 const GAZE_COS = Math.cos((38 * Math.PI) / 180);
 const FRUIT_LIFETIME = 14;
+/** Radio (u) dentro del cual un fantasma en persecucion abandona la rejilla y se abalanza en linea recta. */
+const LUNGE_CHASE = 2.5;
+const LUNGE_SCATTER = 1.5;
+const GHOST_BODY_R = 0.42;
 
 export class Simulation {
   readonly level: LevelDef;
@@ -217,6 +221,8 @@ export class Simulation {
       stareDrain: anyFrozen,
     }, this.events);
 
+    this.guardNumbers();
+
     this.updateWaves(dt);
     this.updateGhosts(dt);
     this.checkCatch();
@@ -225,6 +231,21 @@ export class Simulation {
     this.checkPellets();
     this.updateFruit(dt);
     this.checkExit();
+  }
+
+  /** Red de seguridad: si algun valor se vuelve NaN/infinito se restaura en vez de dejar la camara en el vacio. */
+  private guardNumbers(): void {
+    const p = this.player;
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.z) || !Number.isFinite(p.yaw) || !Number.isFinite(p.vx) || !Number.isFinite(p.vz)) {
+      const yaw = Number.isFinite(p.yaw) ? p.yaw : 0;
+      const [px, py] = this.layout.player;
+      const w = this.maze.cellToWorld(px, py);
+      p.reset(w.x, w.z, yaw);
+      p.invuln = K.INVULN_TIME;
+    }
+    for (const g of this.ghosts) {
+      if (!Number.isFinite(g.x) || !Number.isFinite(g.z) || !Number.isFinite(g.p)) g.resetToSpawn(this.maze, "dormant");
+    }
   }
 
   private updateWaves(dt: number): void {
@@ -334,6 +355,35 @@ export class Simulation {
         });
       }
       if (wrapped) this.emit({ type: "wrap", who: g.kind });
+      this.lunge(g, dt);
+    }
+  }
+
+  /**
+   * La rejilla obliga a los fantasmas a ir por el centro de las celdas, asi que un jugador pegado a una
+   * esquina quedaba a >0.82 u para siempre. A corta distancia y con linea de vision se abalanzan
+   * libremente (con colision contra los muros) para cerrar esos ultimos metros.
+   */
+  private lunge(g: GhostSim, dt: number): void {
+    const p = this.player;
+    const gridX = g.x - g.offX, gridZ = g.z - g.offZ;
+    const dx = p.x - g.x, dz = p.z - g.z;
+    const d = Math.hypot(dx, dz);
+    const hunting = (g.mode === "chase" || g.mode === "scatter") && !g.frozen;
+    const range = g.mode === "chase" ? LUNGE_CHASE : LUNGE_SCATTER;
+    if (hunting && d > 0.01 && d < range && this.maze.rayClear(g.x, g.z, p.x, p.z, 0.3)) {
+      const step = Math.min(d, g.speedCells * K.CELL * 1.0 * dt);
+      const pos = { x: g.x, z: g.z };
+      moveAndSlide(this.maze, this.colliders, pos, (dx / d) * step, (dz / d) * step, GHOST_BODY_R);
+      g.offX = Math.max(-1.6, Math.min(1.6, pos.x - gridX));
+      g.offZ = Math.max(-1.6, Math.min(1.6, pos.z - gridZ));
+      g.x = gridX + g.offX; g.z = gridZ + g.offZ;
+      g.yaw = Math.atan2(dx, dz);
+    } else if (g.offX !== 0 || g.offZ !== 0) {
+      const k = Math.exp(-dt * 5);
+      g.offX *= k; g.offZ *= k;
+      if (Math.abs(g.offX) < 0.01 && Math.abs(g.offZ) < 0.01) { g.offX = 0; g.offZ = 0; }
+      g.x = gridX + g.offX; g.z = gridZ + g.offZ;
     }
   }
 
