@@ -46,13 +46,21 @@ export interface LevelViewUpdate {
   exitUnlocked: boolean;
 }
 
+function disposeMaterial(m: THREE.Material): void {
+  // las texturas de los materiales (decals, pantallas de props) tambien son del nivel
+  for (const v of Object.values(m as unknown as Record<string, unknown>)) {
+    if (v instanceof THREE.Texture) v.dispose();
+  }
+  m.dispose();
+}
+
 function disposeObject(o: THREE.Object3D): void {
   o.traverse((c) => {
     const m = c as THREE.Mesh;
     if (m.geometry) m.geometry.dispose();
     const mat = m.material as THREE.Material | THREE.Material[] | undefined;
-    if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
-    else if (mat) mat.dispose();
+    if (Array.isArray(mat)) mat.forEach(disposeMaterial);
+    else if (mat) disposeMaterial(mat);
   });
 }
 

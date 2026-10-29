@@ -109,7 +109,7 @@ export function makeFinalPass(): ShaderPass {
 
 export function applyFx(pass: ShaderPass, fx: FxState, width: number, height: number): void {
   const u = pass.uniforms as Record<string, { value: unknown }>;
-  (u.uTime.value as number) = fx.time;
+  u.uTime.value = fx.time;
   u.uGlitch.value = fx.glitch;
   u.uAberration.value = fx.aberration;
   u.uStatic.value = fx.staticNoise;
