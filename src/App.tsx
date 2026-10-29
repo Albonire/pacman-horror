@@ -92,6 +92,7 @@ export default function App() {
   const acceptWarning = (reduced: boolean) => {
     const p = { ...progress, warningAccepted: true };
     setProgress(p); saveProgress(p);
+    if (gameRef.current) gameRef.current.progress = p; // el motor guarda su copia al terminar niveles
     if (reduced) changeSettings({ ...settings, scares: "reduced" });
     gameRef.current?.audio.resume();
   };
