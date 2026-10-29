@@ -6,6 +6,8 @@ export interface TexSet {
   map: THREE.CanvasTexture;
   normal: THREE.CanvasTexture;
   rough: THREE.CanvasTexture;
+  /** Mapa emisivo opcional (neones, venas brillantes, estrellas). */
+  emissive?: THREE.CanvasTexture;
 }
 
 export function makeCanvas(w: number, h: number): { c: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
@@ -45,6 +47,18 @@ export class Surface {
   private colorC: HTMLCanvasElement;
   private heightC: HTMLCanvasElement;
   rough: Float32Array;
+  private emitC: HTMLCanvasElement | null = null;
+  private emitCtx: CanvasRenderingContext2D | null = null;
+
+  /** Lienzo emisivo (negro = no emite). Se crea al usarlo por primera vez. */
+  get emit(): CanvasRenderingContext2D {
+    if (!this.emitCtx) {
+      const e = makeCanvas(this.w, this.h);
+      e.ctx.fillStyle = "#000"; e.ctx.fillRect(0, 0, this.w, this.h);
+      this.emitC = e.c; this.emitCtx = e.ctx;
+    }
+    return this.emitCtx;
+  }
 
   constructor(w: number, h: number, base: Rgb, baseHeight = 0.5, baseRough = 0.85) {
     this.w = w; this.h = h;
@@ -124,6 +138,7 @@ export class Surface {
       map: toTexture(this.colorC, true),
       normal: toTexture(this.normalCanvas(normalStrength), false),
       rough: toTexture(this.roughCanvas(), false),
+      emissive: this.emitC ? toTexture(this.emitC, true) : undefined,
     };
   }
 
@@ -134,7 +149,7 @@ export class Surface {
 
 export function disposeTexSet(t: TexSet | undefined): void {
   if (!t) return;
-  t.map.dispose(); t.normal.dispose(); t.rough.dispose();
+  t.map.dispose(); t.normal.dispose(); t.rough.dispose(); t.emissive?.dispose();
 }
 
 /** Mezcla un color hacia otro por t (0..1) en el buffer rgba en la posicion i*4. */

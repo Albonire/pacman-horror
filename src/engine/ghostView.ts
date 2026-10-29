@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { drawGhostFace, FACE_COLORS, type FaceKind, type FaceMood } from "../gfx/faces";
 import { fbmField, hash2, smoothstep } from "../gfx/noise";
 import { Surface, blendPx, makeCanvas, shadePx, toTexture, type TexSet } from "../gfx/texkit";
-import type { GhostMode, GhostSim } from "../sim/ghost";
+import type { GhostMode } from "../sim/ghost";
 import { sharedUniforms } from "./materials";
 
 interface Spec {
@@ -29,7 +29,14 @@ const SPECS: Record<FaceKind, Spec> = {
   3: { r: 0.48, ry: 0.56, H: 1.95, hemBase: 0.14, flare: 0.12, waves: 5, amp: 0.1, body: [208, 124, 48], armLen: 0.72, armed: true, translucent: false },
 };
 
+const CLOTH_CACHE = new Map<number, TexSet>();
 function clothTexture(kind: FaceKind): TexSet {
+  let t = CLOTH_CACHE.get(kind);
+  if (!t) { t = buildCloth(kind); CLOTH_CACHE.set(kind, t); }
+  return t;
+}
+
+function buildCloth(kind: FaceKind): TexSet {
   const sp = SPECS[kind];
   const W = 256, H = 512;
   const S = new Surface(W, H, sp.body, 0.5, 0.8);
@@ -133,6 +140,18 @@ function faceTexture(kind: FaceKind, mood: FaceMood): THREE.CanvasTexture {
 export function disposeFaceCache(): void {
   for (const t of FACE_CACHE.values()) t.dispose();
   FACE_CACHE.clear();
+  for (const t of CLOTH_CACHE.values()) { t.map.dispose(); t.normal.dispose(); t.rough.dispose(); }
+  CLOTH_CACHE.clear();
+}
+
+/** Lo minimo que la vista necesita de un fantasma (la simulacion o una aparicion falsa). */
+export interface GhostLike {
+  mode: GhostMode;
+  x: number;
+  z: number;
+  yaw: number;
+  startled: boolean;
+  frozen: boolean;
 }
 
 type Phase = "dormant" | "startled" | "hunt" | "frightened" | "eaten" | "frozen";
@@ -160,6 +179,7 @@ export class GhostView {
   private bob = Math.random() * 6.28;
   private lookT = { x: 0, y: 0 };
   readonly glowColor: THREE.Color;
+  private ghostly = 1;
   /** Intensidad de luz que desea este fantasma (la asigna el Game a una luz de la reserva). */
   lightIntensity = 0;
   alertness = 0; // 0..1 cuanto lo "ve" el jugador, para audio/efectos
@@ -336,7 +356,7 @@ export class GhostView {
    * Sincroniza el modelo con la simulacion. `px, pz` posicion del jugador; `frightLow` true en los
    * ultimos segundos del poder (parpadeo).
    */
-  update(dt: number, time: number, g: GhostSim, px: number, pz: number, frightLow: boolean): void {
+  update(dt: number, time: number, g: GhostLike, px: number, pz: number, frightLow: boolean): void {
     const dx = px - g.x, dz = pz - g.z;
     const dist = Math.hypot(dx, dz);
 
@@ -434,6 +454,20 @@ export class GhostView {
   /** Fuerza el modo grito (para el susto de muerte). */
   forceScream(): void { this.setPhase("hunt"); this.setMood("scream"); this.lightIntensity = 2.2; }
 
+  /** Opacidad global (1 = solido). Se usa en las apariciones del director de sustos. */
+  setGhostly(a: number): void {
+    if (Math.abs(a - this.ghostly) < 0.01) return;
+    this.ghostly = a;
+    const solid = a >= 0.99;
+    this.bodyMat.transparent = solid ? this.sp.translucent : true;
+    this.bodyMat.opacity = solid ? (this.sp.translucent ? 0.8 : 1) : a * 0.85;
+    this.bodyMat.depthWrite = solid;
+    this.patchMat.opacity = a;
+    this.pupilMat.transparent = !solid;
+    this.pupilMat.opacity = a;
+    this.bodyMat.needsUpdate = true;
+  }
+
   private pupilBase(i: number): { x: number } {
     const pu = this.pupils[i];
     if (!pu.userData.baseX) pu.userData.baseX = pu.position.x;
@@ -447,6 +481,5 @@ export class GhostView {
       const mat = m.material as THREE.Material | THREE.Material[] | undefined;
       if (Array.isArray(mat)) mat.forEach((x) => x.dispose()); else if (mat) mat.dispose();
     });
-    this.cloth.map.dispose(); this.cloth.normal.dispose(); this.cloth.rough.dispose();
   }
 }

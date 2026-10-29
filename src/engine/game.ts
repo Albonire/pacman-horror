@@ -18,6 +18,7 @@ import { disposeTexSet } from "../gfx/texkit";
 import type { FaceKind } from "../gfx/faces";
 import type { SimEvent } from "../sim/events";
 import { Simulation } from "../sim/simulation";
+import { ScareDirector } from "./director";
 import { disposeFaceCache, GhostView } from "./ghostView";
 import { Input } from "./input";
 import { LevelView } from "./levelView";
@@ -69,6 +70,7 @@ export class Game {
   readonly rig: CameraRig;
   readonly input: Input;
   readonly particles = new ParticlePool(480);
+  private smoke = new ParticlePool(220, false);
   readonly fx: FxState = defaultFx();
 
   audio: GameAudio;
@@ -91,6 +93,8 @@ export class Game {
   private scare: ScareSystem;
   private fruit = new FruitView();
   private ghostViews: GhostView[] = [];
+  private apparitions = new Map<number, GhostView>();
+  private director: ScareDirector | null = null;
   private texCache = new Map<string, ThemeTextures>();
 
   private hemi = new THREE.HemisphereLight(0x887755, 0x221810, 0.9);
@@ -164,6 +168,7 @@ export class Game {
       this.scene.add(l);
     }
     this.scene.add(this.particles.points);
+    this.scene.add(this.smoke.points);
     this.scene.add(this.fruit.group);
 
     this.pacman = new PacManBody();
@@ -377,6 +382,7 @@ export class Game {
     this.jaws.dispose();
     this.fruit.dispose();
     this.particles.dispose();
+    this.smoke.dispose();
     for (const t of this.texCache.values()) { disposeTexSet(t.wall); disposeTexSet(t.floor); disposeTexSet(t.ceiling); }
     this.texCache.clear();
     disposeFaceCache();
@@ -409,6 +415,10 @@ export class Game {
     if (this.view) { this.scene.remove(this.view.group); this.view.dispose(); this.view = null; }
     for (const g of this.ghostViews) { this.scene.remove(g.group); g.dispose(); }
     this.ghostViews = [];
+    for (const g of this.apparitions.values()) { this.scene.remove(g.group); g.dispose(); }
+    this.apparitions.clear();
+    this.director?.dispose();
+    this.director = null;
     this.fruit.hide();
   }
 
@@ -434,6 +444,25 @@ export class Game {
       this.scene.add(gv.group);
       this.ghostViews.push(gv);
     }
+    for (let k = 0; k < 4; k++) {
+      const av = new GhostView(k as FaceKind);
+      av.group.visible = false;
+      this.scene.add(av.group);
+      this.apparitions.set(k, av);
+    }
+    const game = this;
+    this.director = new ScareDirector({
+      get sim() { return game.sim!; },
+      rig: this.rig,
+      audio: this.audio,
+      scare: this.scare,
+      settings: () => this.settings,
+      tension: () => this.tension,
+      ambientScale: () => (this.run ? DIFFICULTIES[this.run.diff].ambientScares : 1) * (this.settings.scares === "off" ? 0.7 : 1),
+      apparition: (kind) => this.apparitions.get(kind)!,
+      setLightsMul: (v) => { this.lightsMul = v; },
+      hudMessage: (t) => this.hud.message(t, 2, "warn"),
+    });
     this.applyTheme(theme);
     this.audio.setTheme(level.theme);
     this.resetRuntime();
@@ -466,6 +495,7 @@ export class Game {
     this.fx.blackout = 0; this.fx.staticNoise = 0; this.fx.flash = 0; this.fx.glitch = 0;
     this.rig.mode = "fp";
     this.pacman.group.visible = false;
+    this.director?.reset(28);
     this.attractX = sim.maze.cellToWorld(2, sim.maze.tunnelRow).x;
   }
 
@@ -598,6 +628,7 @@ export class Game {
     if (this.run) this.run.totalTime += dt;
 
     this.handleEvents(sim.drainEvents());
+    this.director?.update(dt);
     this.updateSonar(dt);
     this.updateTension(dt);
     this.updateHeartbeat(dt);
@@ -767,6 +798,8 @@ export class Game {
   private beginDeath(): void {
     const sim = this.sim!;
     const g = sim.caughtBy!;
+    this.director?.cancel();
+    this.lightsMul = 1;
     this.setPhase("dying");
     this.input.capture = false;
     this.hud.showHint(null);
@@ -793,6 +826,7 @@ export class Game {
       this.setPhase("gameover");
     } else {
       this.respawnView();
+      this.director?.reset(22);
       this.input.clear();
       this.input.capture = true;
       this.setPhase("playing");
@@ -809,6 +843,8 @@ export class Game {
   }
 
   private beginOutro(): void {
+    this.director?.cancel();
+    this.lightsMul = 1;
     this.outroT = 0;
     this.input.capture = false;
     this.hud.setSonarVisible(false);
@@ -889,16 +925,33 @@ export class Game {
       const pl = view.pellets[best];
       this.pelletLight.position.set(pl.x, 0.9, pl.z);
       this.pelletLight.intensity = 7 + Math.sin(this.time * 4.2) * 2;
-      for (const q of view.pellets) q.light.visible = false;
     } else this.pelletLight.intensity = 0;
+
+    // aparicion del director
+    const fk = this.director?.fake;
+    if (fk) fk.view.update(dt, this.time, fk.g, p.x, p.z, false);
 
     // fruta
     this.fruit.update(dt, p.x, p.z, sim.fruit.timer);
 
     this.particles.update(dt);
+    this.updateSteam(dt);
 
     // pellets comidos (sincroniza)
     sim.pellets.forEach((pl, i) => { if (pl.eaten && !view.pellets[i].eaten) view.eatPellet(i); });
+  }
+
+  private updateSteam(dt: number): void {
+    const view = this.view, sim = this.sim;
+    this.smoke.update(dt);
+    if (!view || !sim || dt <= 0) return;
+    const p = sim.player;
+    for (const v of view.vents) {
+      if (Math.hypot(v.x - p.x, v.z - p.z) > 16) continue;
+      if (Math.random() < dt * 7) {
+        this.smoke.emit(v.x + (Math.random() - 0.5) * 0.2, 0.4, v.z + (Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.5, 0.7 + Math.random() * 0.6, (Math.random() - 0.5) * 0.5, 2.6, 0.9, 0xb4aca4, -0.05, 0.7);
+      }
+    }
   }
 
   private updateCameraAndLights(dt: number): void {
@@ -1024,6 +1077,7 @@ export class Game {
     this.scare.updateFlash(dt);
     const size = this.renderer.getSize(new THREE.Vector2());
     this.particles.setScale(size.y * this.renderer.getPixelRatio(), this.rig.camera.fov);
+    this.smoke.setScale(size.y * this.renderer.getPixelRatio(), this.rig.camera.fov);
     applyFx(this.finalPass, this.fx, size.x * this.renderer.getPixelRatio(), size.y * this.renderer.getPixelRatio());
     this.composer.render(dt);
   }
