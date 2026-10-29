@@ -18,7 +18,7 @@ import { disposeTexSet } from "../gfx/texkit";
 import type { FaceKind } from "../gfx/faces";
 import type { SimEvent } from "../sim/events";
 import { rayDistance } from "../sim/collision";
-import { Simulation } from "../sim/simulation";
+import { BITE_COOLDOWN, Simulation } from "../sim/simulation";
 import { ScareDirector } from "./director";
 import { disposeFaceCache, GhostView } from "./ghostView";
 import { Input } from "./input";
@@ -543,11 +543,14 @@ export class Game {
     this.cb.onSettings(this.settings);
   }
 
+  private biteReq = false;
+  private freezeHintShown = false;
   private bite(): void {
     if (this.phase !== "playing") return;
     this.jaws.chomp(0.62);
     this.pacman.chomp(0.95);
     this.audio.playBite();
+    this.biteReq = true; // la simulacion decide si alcanza a alguien
   }
 
   private onLockError(): void {
@@ -668,7 +671,8 @@ export class Game {
       this.hud.showHint(null);
     }
 
-    sim.update(dt, { forward: axes.forward, strafe: axes.strafe, sprint: this.input.sprint, sonar: this.input.sonar });
+    sim.update(dt, { forward: axes.forward, strafe: axes.strafe, sprint: this.input.sprint, sonar: this.input.sonar, bite: this.biteReq });
+    this.biteReq = false;
     this.levelTime += dt;
     if (this.run) this.run.totalTime += dt;
 
@@ -825,7 +829,21 @@ export class Game {
         case "exhausted": this.audio.playExhausted(); this.hud.message("Sin aliento", 1.8, "warn"); break;
         case "recovered": this.audio.playRecovered(); break;
         case "batteryDead": this.audio.playBatteryDead(); this.hud.message("Sin batería: la luz se apaga", 2.4, "warn"); break;
-        case "frozen": this.audio.playFreeze(e.frozen); break;
+        case "frozen":
+          this.audio.playFreeze(e.frozen);
+          if (e.frozen && !this.freezeHintShown) {
+            this.freezeHintShown = true;
+            this.hud.message("El Estático no se mueve mientras lo miras con luz. Si apartas la vista, se lanza.", 5, "info");
+          }
+          break;
+        case "bite":
+          if (e.stunned > 0) {
+            this.audio.playFreeze(true);
+            this.rig.addTrauma(0.3); this.hitStop = 0.08;
+            this.fx.glitch = Math.max(this.fx.glitch, 0.6);
+            this.hud.message("Los dientes lo aturden", 1.6, "good");
+          } else if (e.eaten === 0) this.hud.message("Muerdes el aire", 1.2, "warn");
+          break;
       }
     }
   }
@@ -1082,6 +1100,7 @@ export class Game {
       levelLabel: `${this.level.subtitle} · ${this.level.name}`,
       stamina: p.stamina / K.STAMINA_MAX,
       battery: p.battery / K.BATTERY_MAX,
+      bite: 1 - sim.biteCd / BITE_COOLDOWN,
       exhausted: p.exhausted,
       lightOn: p.lightOn,
       powerFrac: sim.powered ? sim.frightTimer / Math.max(0.01, sim.frightTotal) : 0,

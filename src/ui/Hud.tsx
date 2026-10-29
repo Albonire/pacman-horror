@@ -37,6 +37,8 @@ export const HudView = forwardRef<HTMLDivElement, { radarRef: React.RefObject<HT
         <div className="bar"><div data-hud="battery" /></div>
         <div className="hud-label" style={{ margin: "10px 0 4px" }} data-hud="staminaLabel">ALIENTO [SHIFT]</div>
         <div className="bar bar-stamina"><div data-hud="stamina" /></div>
+        <div className="hud-label" style={{ margin: "10px 0 4px" }}>MORDISCO [X]</div>
+        <div className="bar bar-bite"><div data-hud="bite" /></div>
       </div>
 
       <div className="hud-msg" data-hud="message" />

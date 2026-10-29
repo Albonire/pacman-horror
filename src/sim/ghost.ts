@@ -36,6 +36,8 @@ export class GhostSim {
   startled = false;
   reverseQueued = false;
   frozen = false; // El Estatico: inmovil mientras se le mira
+  /** Segundos que sigue aturdido por un mordisco: no se mueve ni mata. */
+  stun = 0;
   watched = 0; // segundos acumulados siendo mirado
   speedCells = 1.5; // velocidad efectiva calculada en cada tick
   /** Segundos desde que desperto (para animaciones de aparicion). */
@@ -58,7 +60,7 @@ export class GhostSim {
   get cell(): Cell { return [this.cx, this.cy]; }
   get active(): boolean { return this.mode !== "dormant"; }
   /** Puede matar al jugador. */
-  get lethal(): boolean { return this.mode === "scatter" || this.mode === "chase"; }
+  get lethal(): boolean { return (this.mode === "scatter" || this.mode === "chase") && this.stun <= 0; }
 
   resetToSpawn(maze: Maze, mode: GhostMode): void {
     this.cx = this.spawn[0];
@@ -67,6 +69,7 @@ export class GhostSim {
     this.moving = false;
     this.mode = mode;
     this.frozen = false;
+    this.stun = 0;
     this.watched = 0;
     this.reverseQueued = false;
     this.startled = false;

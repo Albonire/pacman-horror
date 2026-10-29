@@ -152,6 +152,7 @@ export interface GhostLike {
   yaw: number;
   startled: boolean;
   frozen: boolean;
+  stun?: number;
 }
 
 type Phase = "dormant" | "startled" | "hunt" | "frightened" | "eaten" | "frozen";
@@ -366,7 +367,7 @@ export class GhostView {
     if (mode === "eaten") phase = "eaten";
     else if (mode === "frightened") phase = "frightened";
     else if (mode === "dormant") phase = g.startled ? "startled" : "dormant";
-    else phase = g.frozen ? "frozen" : "hunt";
+    else phase = g.frozen || (g.stun ?? 0) > 0 ? "frozen" : "hunt";
     this.setPhase(phase);
     // gritar cuando esta cerca y es peligroso
     if (phase === "hunt" && dist < 6.5) this.setMood("scream");

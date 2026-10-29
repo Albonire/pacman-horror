@@ -157,7 +157,7 @@ export function ControlsList() {
     [<><kbd>Espacio</kbd> / clic dcho.</>, "Ecolocalización: mapa y entidades (mantener, frena)"],
     [<><kbd>F</kbd></>, "Resplandor: linterna (gasta energía; frena al Estático)"],
     [<><kbd>C</kbd></>, "Cambiar cámara: 1ª / 3ª persona"],
-    [<><kbd>X</kbd> / clic izq.</>, "Morder"],
+    [<><kbd>X</kbd> / clic izq.</>, "Morder: aturde al fantasma de enfrente (gasta aliento, se recarga)"],
     [<><kbd>M</kbd></>, "Silenciar"],
     [<><kbd>Esc</kbd> / <kbd>P</kbd></>, "Pausa"],
   ];
@@ -244,6 +244,9 @@ export function BriefingScreen({
         <div className="kicker" style={{ marginBottom: 22 }}>{d.label} · {d.lives} {d.lives === 1 ? "VIDA" : "VIDAS"}</div>
         <p className="p" style={{ maxWidth: 560, marginBottom: 24 }}>
           OBJETIVO: devora todos los nodos para abrir la salida. Los orbes grandes te dan poder temporal sobre los fantasmas.
+        </p>
+        <p className="p" style={{ maxWidth: 560, marginBottom: 24 }}>
+          Las figuras inmóviles son fantasmas dormidos: despiertan con el tiempo o si te acercas. El Estático solo se queda quieto mientras lo miras con la linterna. Con X muerdes y aturdes al que tienes delante.
         </p>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <Btn autoFocus size="lg" onClick={onEnter}>ENTRAR</Btn>

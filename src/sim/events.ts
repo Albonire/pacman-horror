@@ -21,4 +21,5 @@ export type SimEvent =
   | { type: "exhausted" }
   | { type: "recovered" }
   | { type: "batteryDead" }
-  | { type: "frozen"; ghost: GhostKind; frozen: boolean };
+  | { type: "frozen"; ghost: GhostKind; frozen: boolean }
+  | { type: "bite"; stunned: number; eaten: number };

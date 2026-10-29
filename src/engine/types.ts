@@ -39,6 +39,7 @@ export interface HudState {
   levelLabel: string;
   stamina: number; // 0..1
   battery: number; // 0..1
+  bite: number; // 0..1, 1 = listo para morder
   exhausted: boolean;
   lightOn: boolean;
   powerFrac: number; // 0..1, 0 = sin poder

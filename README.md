@@ -17,11 +17,13 @@ Todo es procedural: texturas, modelos, música, voces, respiraciones y sustos se
 | Ecolocalización (mapa y entidades) | `Espacio` o clic derecho, mantener; frena el paso |
 | Linterna "Resplandor" | `F` (gasta batería; congela al Estático) |
 | Cámara 1ª / 3ª persona | `C` |
-| Morder | `X` o clic izquierdo |
+| Morder (aturde al fantasma de enfrente, gasta aliento) | `X` o clic izquierdo |
 | Silenciar | `M` |
 | Pausa | `Esc` o `P` |
 
 Si el navegador no concede el control del ratón, el juego cambia solo al modo teclado. Está pensado para ordenador (teclado y ratón); no hay controles táctiles.
+
+El campo de visión de Ajustes es horizontal (por defecto 90 grados).
 
 Si el equipo no sostiene unos 26 fps durante unos segundos de partida, el juego baja un escalón la calidad gráfica y lo avisa en pantalla.
 
@@ -31,6 +33,8 @@ Si el equipo no sostiene unos 26 fps durante unos segundos de partida, el juego 
 - Los 6 orbes grandes (pellets) asustan a los fantasmas: huyen, puedes comértelos y el combo suma 200, 400, 800 y 1600.
 - La fruta aparece al 33 % y al 66 % de los nodos y restaura aliento y batería.
 - Vida extra a los 10 000 puntos base.
+- El mordisco (`X`) aturde unos 1,7 s al fantasma que tienes delante (a menos de ~2 u, con línea de visión): no se mueve ni mata. Cuesta aliento y tarda 4,5 s en recargarse. Si el fantasma está asustado, se lo come.
+- Los fantasmas cercanos con línea de visión se abalanzan en línea recta: pegarse a una esquina de la celda no sirve de escondite.
 - Si te atrapan, reapareces con unos segundos de protección y los fantasmas vuelven a dormir. Los nodos comidos no se reponen.
 - Hay un túnel continuo en la fila central que conecta ambos bordes del mapa.
 

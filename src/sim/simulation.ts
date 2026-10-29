@@ -41,6 +41,10 @@ const FRUIT_LIFETIME = 14;
 const LUNGE_CHASE = 2.5;
 const LUNGE_SCATTER = 1.5;
 const GHOST_BODY_R = 0.42;
+export const BITE_COOLDOWN = 4.5;
+export const BITE_STAMINA = 18;
+const BITE_RANGE = 2.1;
+const BITE_STUN = 1.7;
 
 export class Simulation {
   readonly level: LevelDef;
@@ -70,6 +74,8 @@ export class Simulation {
 
   time = 0;
   attemptTime = 0;
+  /** Segundos hasta poder volver a morder. */
+  biteCd = 0;
   exitUnlocked = false;
 
   // fases
@@ -222,6 +228,8 @@ export class Simulation {
     }, this.events);
 
     this.guardNumbers();
+    this.biteCd = Math.max(0, this.biteCd - dt);
+    if (input.bite) this.tryBite();
 
     this.updateWaves(dt);
     this.updateGhosts(dt);
@@ -311,6 +319,12 @@ export class Simulation {
         continue;
       }
 
+      if (g.stun > 0) {
+        g.stun = Math.max(0, g.stun - dt);
+        g.refreshWorld(this.maze);
+        continue;
+      }
+
       // El Estatico: se congela mientras se le mira
       if (g.kind === 3 && (g.mode === "scatter" || g.mode === "chase")) {
         const gazed = this.isGazed(g);
@@ -369,7 +383,7 @@ export class Simulation {
     const gridX = g.x - g.offX, gridZ = g.z - g.offZ;
     const dx = p.x - g.x, dz = p.z - g.z;
     const d = Math.hypot(dx, dz);
-    const hunting = (g.mode === "chase" || g.mode === "scatter") && !g.frozen;
+    const hunting = (g.mode === "chase" || g.mode === "scatter") && !g.frozen && g.stun <= 0;
     const range = g.mode === "chase" ? LUNGE_CHASE : LUNGE_SCATTER;
     if (hunting && d > 0.01 && d < range && this.maze.rayClear(g.x, g.z, p.x, p.z, 0.3)) {
       const step = Math.min(d, g.speedCells * K.CELL * 1.0 * dt);
@@ -416,12 +430,7 @@ export class Simulation {
       const d = Math.hypot(g.x - p.x, g.z - p.z);
       if (d > K.GHOST_CATCH_DIST) continue;
       if (g.mode === "frightened") {
-        g.mode = "eaten";
-        const pts = K.SCORE.ghostCombo[Math.min(this.combo, K.SCORE.ghostCombo.length - 1)];
-        this.combo++;
-        this.stats.ghostsEaten++;
-        this.addScore(pts);
-        this.emit({ type: "ghostEaten", ghost: g.kind, points: Math.round(pts * this.diff.scoreMult), combo: this.combo, x: g.x, z: g.z });
+        this.eatGhost(g);
       } else if (g.lethal && p.invuln <= 0) {
         this.state = "caught";
         this.caughtBy = g;
@@ -429,6 +438,38 @@ export class Simulation {
         return;
       }
     }
+  }
+
+  private eatGhost(g: GhostSim): void {
+    g.mode = "eaten";
+    const pts = K.SCORE.ghostCombo[Math.min(this.combo, K.SCORE.ghostCombo.length - 1)];
+    this.combo++;
+    this.stats.ghostsEaten++;
+    this.addScore(pts);
+    this.emit({ type: "ghostEaten", ghost: g.kind, points: Math.round(pts * this.diff.scoreMult), combo: this.combo, x: g.x, z: g.z });
+  }
+
+  /**
+   * Mordisco: con resistencia suficiente alcanza ~2 u por delante. Aturde unos segundos a los fantasmas
+   * peligrosos (no matan ni se mueven) y se come a los asustados aunque no se toquen.
+   */
+  private tryBite(): void {
+    const p = this.player;
+    if (this.biteCd > 0 || p.exhausted || p.stamina < BITE_STAMINA) return;
+    p.stamina -= BITE_STAMINA;
+    this.biteCd = BITE_COOLDOWN;
+    const [fx, fz] = p.forwardVec();
+    let stunned = 0, eaten = 0;
+    for (const g of this.ghosts) {
+      if (g.mode === "dormant" || g.mode === "eaten") continue;
+      const dx = g.x - p.x, dz = g.z - p.z, d = Math.hypot(dx, dz);
+      if (d > BITE_RANGE || d < 0.01) continue;
+      if ((fx * dx + fz * dz) / d < 0.35) continue;
+      if (!this.maze.rayClear(p.x, p.z, g.x, g.z, 0.3)) continue;
+      if (g.mode === "frightened") { this.eatGhost(g); eaten++; }
+      else if (g.mode === "scatter" || g.mode === "chase") { g.stun = BITE_STUN; stunned++; }
+    }
+    this.emit({ type: "bite", stunned, eaten });
   }
 
   private checkDots(): void {

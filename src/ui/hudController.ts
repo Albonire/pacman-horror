@@ -21,7 +21,7 @@ export class HudController implements HudApi {
 
   constructor(root: HTMLElement) {
     this.root = root;
-    for (const n of ["score", "high", "level", "nodes", "lives", "stamina", "battery", "staminaLabel", "batteryLabel",
+    for (const n of ["score", "high", "level", "nodes", "lives", "stamina", "battery", "bite", "staminaLabel", "batteryLabel",
       "power", "powerFill", "message", "hint", "radar", "popups", "vignette", "flash", "exit", "fruit", "mute", "cam"]) {
       this.el[n] = q(root, n);
     }
@@ -61,6 +61,11 @@ export class HudController implements HudApi {
       (e.battery as HTMLElement).style.width = `${ba}%`;
       e.battery.classList.toggle("bar-warn", ba < 25);
       e.battery.classList.toggle("bar-off", !s.lightOn);
+    });
+    const bi = Math.round(s.bite * 100);
+    this.set("bite", "bite", String(bi), () => {
+      (e.bite as HTMLElement).style.width = `${bi}%`;
+      e.bite.classList.toggle("bar-ready", bi >= 100);
     });
     this.set("power", "power", s.powerFrac > 0 ? "1" : "0", (v) => { e.power.style.opacity = v; });
     if (s.powerFrac > 0) {
