@@ -33,7 +33,7 @@ import { CameraRig } from "./rig";
 import { ScareSystem } from "./scare";
 import {
   clamp, DEFAULT_PROGRESS, DEFAULT_SETTINGS, saveProgress, saveSettings,
-  type Progress, type Settings,
+  type Progress, type Quality, type Settings,
 } from "./settings";
 import type { GameCallbacks, HudApi, HudState, Phase, RunSummary } from "./types";
 
@@ -103,6 +103,7 @@ export class Game {
   private headlamp = new THREE.SpotLight(0xfff0c0, 60, 34, 0.5, 0.75, 2);
   private headTarget = new THREE.Object3D();
   private headDist = 6;
+  private perf = { t: 0, sum: 0, n: 0, checks: 0 };
   private glow = new THREE.PointLight(0xffd23a, 2.2, 5, 2);
   private ghostLights: THREE.PointLight[] = [];
   private pelletLight = new THREE.PointLight(0xffa22e, 0, 9, 2);
@@ -550,10 +551,34 @@ export class Game {
   private frame = (now: number): void => {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.frame);
-    const real = Math.min(0.1, Math.max(0, (now - this.last) / 1000));
+    const raw = Math.max(0, (now - this.last) / 1000);
+    const real = Math.min(0.1, raw);
     this.last = now;
+    this.watchPerformance(raw);
     this.advance(real);
   };
+
+  /**
+   * Si el equipo no sostiene ~26 fps durante unos segundos de partida, baja la calidad un escalon
+   * (alta, media, baja) y lo avisa. Se evalua poco despues de entrar al nivel y un maximo de tres veces.
+   */
+  private watchPerformance(rawDt: number): void {
+    if (this.phase !== "playing") { this.perf.t = 0; this.perf.sum = 0; this.perf.n = 0; return; }
+    if (this.perf.checks >= 3 || rawDt > 0.6) return; // los parones (cambio de pestana, carga) no cuentan
+    this.perf.t += rawDt;
+    if (this.perf.t < 2) return; // calentamiento: compilacion de shaders y subida de texturas
+    this.perf.sum += rawDt; this.perf.n++;
+    if (this.perf.sum < 4) return;
+    const avg = this.perf.sum / this.perf.n;
+    this.perf.sum = 0; this.perf.n = 0; this.perf.t = 0;
+    if (avg <= 1 / 26) { this.perf.checks = 3; return; } // fluido: no se vuelve a evaluar
+    this.perf.checks++;
+    const order: Quality[] = ["high", "medium", "low"];
+    const next = order[order.indexOf(this.settings.quality) + 1];
+    if (!next) { this.perf.checks = 3; return; }
+    this.applySettings({ ...this.settings, quality: next });
+    this.hud.message(`Rendimiento bajo (${Math.round(1 / avg)} fps): calidad reducida a ${next === "medium" ? "MEDIA" : "BAJA"}.`, 4, "warn");
+  }
 
   /** Avanza la simulacion y renderiza un frame. Tambien lo usan las pruebas. */
   advance(realDt: number, renderFrame = true): void {
