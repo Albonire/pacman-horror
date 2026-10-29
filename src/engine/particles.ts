@@ -72,6 +72,7 @@ export class ParticlePool {
       transparent: true,
       depthWrite: false,
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+      premultipliedAlpha: !additive,
     });
     this.points = new THREE.Points(this.geo, this.material);
     this.points.frustumCulled = false;

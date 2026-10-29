@@ -2,11 +2,14 @@
 
 import * as THREE from "three";
 import { CELL, COLORS, WALL_H } from "../config/constants";
-import { hash2 } from "../gfx/noise";
+import { fbmField, hash2 } from "../gfx/noise";
+import { Surface } from "../gfx/texkit";
 import type { ThemeTextures, ThemeVisual } from "../gfx/themes";
 import { mulberry32 } from "../sim/rng";
 import type { Simulation } from "../sim/simulation";
 import { surfaceMaterial, sharedUniforms, withTime } from "./materials";
+import { buildDecals, DECALS } from "./decals";
+import { buildProps } from "./propsBuilder";
 import { buildWallGeometry } from "./wallGeometry";
 import { makeExitDoor, type ExitView } from "./exitView";
 import type { Quality } from "./settings";
@@ -19,6 +22,7 @@ interface FixtureState {
   phase: number;
   speed: number;
   level: number;
+  color: THREE.Color;
 }
 
 export interface PelletView {
@@ -26,7 +30,6 @@ export interface PelletView {
   core: THREE.Mesh;
   halo: THREE.Mesh;
   rings: THREE.Mesh[];
-  light: THREE.PointLight;
   x: number;
   z: number;
   eaten: boolean;
@@ -73,6 +76,13 @@ export class LevelView {
   private poolSize: number;
   private dustBase: Float32Array;
   private lastOrderT = -1;
+  private wallMat: THREE.MeshStandardMaterial;
+  private waterMat: THREE.MeshStandardMaterial | null = null;
+  private waterNormal: THREE.Texture | null = null;
+  private screens: THREE.MeshBasicMaterial[] = [];
+  private glands: THREE.Mesh[] = [];
+  /** Salidas de vapor (Subsuelo): el Game emite humo desde aqui. */
+  vents: { x: number; z: number }[] = [];
 
   constructor(sim: Simulation, theme: ThemeVisual, tex: ThemeTextures, quality: Quality) {
     this.theme = theme;
@@ -101,6 +111,35 @@ export class LevelView {
     walls.castShadow = true;
     walls.receiveShadow = true;
     this.group.add(walls);
+    this.wallMat = wallMat;
+
+    // ---- agua baja sobre el suelo (Piscinas) ----
+    if (theme.water) {
+      const ws = new Surface(256, 256, [128, 128, 128], 0.5, 0.1);
+      const f1 = fbmField(256, 256, 6, 6, 4, 901), f2 = fbmField(256, 256, 11, 11, 3, 903);
+      ws.pass((i, _x, _y, _d, hg) => { hg[i] = 0.5 + (f1[i] - 0.5) * 0.7 + (f2[i] - 0.5) * 0.35; });
+      const wt = ws.build(3.2);
+      wt.normal.repeat.set(mazeW / 7, mazeD / 7);
+      this.waterNormal = wt.normal;
+      wt.map.dispose(); wt.rough.dispose();
+      this.waterMat = new THREE.MeshStandardMaterial({
+        color: 0x2a7f8c, transparent: true, opacity: 0.5, roughness: 0.05, metalness: 0.15,
+        normalMap: wt.normal, normalScale: new THREE.Vector2(0.55, 0.55), depthWrite: false,
+      });
+      const water = new THREE.Mesh(new THREE.PlaneGeometry(mazeW + margin, mazeD + margin), this.waterMat);
+      water.rotation.x = -Math.PI / 2;
+      water.position.y = 0.06;
+      water.renderOrder = 1;
+      this.group.add(water);
+    }
+
+    // ---- decals y utileria ----
+    this.group.add(buildDecals(sim, DECALS[theme.id] ?? [], quality === "low" ? 0.6 : 1));
+    const props = buildProps(sim, theme.id);
+    this.group.add(props.group);
+    this.screens = props.screens;
+    this.vents = props.vents;
+    this.glands = props.glands;
 
     // ---- cortinas del tunel (vacio oscuro al final de cada conector) ----
     const curtainMat = new THREE.ShaderMaterial({
@@ -197,10 +236,11 @@ export class LevelView {
       const w = maze.cellToWorld(x, ty);
       spots.push({ x: w.x, z: w.z, alongX: true });
     }
+    const orb = theme.fixtureStyle === "orb";
     const w = theme.fixtureStyle === "tube" ? 1.5 : 0.9;
     const d = theme.fixtureStyle === "tube" ? 0.34 : 0.9;
-    const glowGeo = new THREE.BoxGeometry(w, 0.03, d);
-    const frameGeo = new THREE.BoxGeometry(w + 0.16, 0.07, d + 0.16);
+    const glowGeo = orb ? new THREE.SphereGeometry(0.24, 14, 10) : new THREE.BoxGeometry(w, 0.03, d);
+    const frameGeo = orb ? new THREE.CylinderGeometry(0.05, 0.12, 0.3, 8) : new THREE.BoxGeometry(w + 0.16, 0.07, d + 0.16);
     const glowMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const frameMat = new THREE.MeshStandardMaterial({ color: 0x5a554a, roughness: 0.7, metalness: 0.3 });
     const glow = new THREE.InstancedMesh(glowGeo, glowMat, spots.length);
@@ -208,15 +248,16 @@ export class LevelView {
     const q = new THREE.Quaternion();
     const s = new THREE.Vector3(1, 1, 1);
     spots.forEach((sp, i) => {
-      const dead = rng() < 0.1;
+      const dead = rng() < theme.deadChance;
       const broken = !dead && rng() < theme.brokenChance;
-      this.fixtures.push({ x: sp.x, z: sp.z, dead, broken, phase: rng() * 6.28, speed: 5 + rng() * 9, level: 1 });
+      const col = new THREE.Color(theme.fixtureColors ? theme.fixtureColors[Math.floor(rng() * theme.fixtureColors.length)] : theme.fixtureColor);
+      this.fixtures.push({ x: sp.x, z: sp.z, dead, broken, phase: rng() * 6.28, speed: 5 + rng() * 9, level: 1, color: col });
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), sp.alongX ? 0 : Math.PI / 2);
-      this.tmpM.compose(new THREE.Vector3(sp.x, WALL_H - 0.045, sp.z), q, s);
+      this.tmpM.compose(new THREE.Vector3(sp.x, orb ? WALL_H - 0.5 : WALL_H - 0.045, sp.z), q, s);
       glow.setMatrixAt(i, this.tmpM);
-      this.tmpM.compose(new THREE.Vector3(sp.x, WALL_H - 0.03, sp.z), q, s);
+      this.tmpM.compose(new THREE.Vector3(sp.x, orb ? WALL_H - 0.18 : WALL_H - 0.03, sp.z), q, s);
       frame.setMatrixAt(i, this.tmpM);
-      glow.setColorAt(i, this.fixtureCol.set(theme.fixtureColor).multiplyScalar(dead ? 0.06 : 2.2));
+      glow.setColorAt(i, this.fixtureCol.copy(col).multiplyScalar(dead ? 0.06 : 2.2));
     });
     glow.instanceMatrix.needsUpdate = true;
     frame.instanceMatrix.needsUpdate = true;
@@ -257,11 +298,8 @@ export class LevelView {
       group.add(r);
       rings.push(r);
     }
-    const light = new THREE.PointLight(0xffa22e, 7, 8, 2);
-    light.position.y = 0.9;
-    group.add(light);
     this.group.add(group);
-    return { group, core, halo, rings, light, x, z, eaten: false, fade: 1 };
+    return { group, core, halo, rings, x, z, eaten: false, fade: 1 };
   }
 
   eatDot(cellIndex: number): void {
@@ -297,7 +335,7 @@ export class LevelView {
       if (u.powered) lv = lv * 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(t * 9 + f.phase));
       f.level = lv;
       if (mesh && (i & 3) === (Math.floor(t * 30) & 3)) {
-        mesh.setColorAt(i, this.fixtureCol.set(this.theme.fixtureColor).multiplyScalar(f.dead ? 0.05 : 0.05 + lv * 2.2));
+        mesh.setColorAt(i, this.fixtureCol.copy(f.color).multiplyScalar(f.dead ? 0.05 : 0.05 + lv * 2.2));
       }
     }
     if (mesh && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
@@ -315,6 +353,7 @@ export class LevelView {
       const l = this.fixtureLights[k];
       if (!f) { l.intensity = 0; continue; }
       l.position.set(f.x, WALL_H - 0.4, f.z);
+      l.color.copy(f.color);
       l.intensity = this.theme.fixtureIntensity * f.level;
     }
 
@@ -324,7 +363,6 @@ export class LevelView {
         p.fade = Math.max(0, p.fade - u.dt * 3);
         p.group.visible = p.fade > 0.01;
         p.group.scale.setScalar(Math.max(0.01, p.fade));
-        p.light.intensity = 7 * p.fade;
         continue;
       }
       const pulse = 1 + 0.12 * Math.sin(t * 4.2);
@@ -333,8 +371,23 @@ export class LevelView {
       p.halo.scale.setScalar(1 + 0.2 * Math.sin(t * 3.1 + 1));
       p.rings[0].rotation.z = t * 1.2;
       p.rings[1].rotation.z = -t * 0.9;
-      p.light.intensity = 6 + 2 * Math.sin(t * 4.2);
     }
+
+    // efectos por tema
+    const th = this.theme;
+    if (th.pulse) {
+      const k = 0.5 + 0.5 * Math.sin(t * th.pulse.speed);
+      const beat = Math.pow(Math.max(0, Math.sin(t * th.pulse.speed * 2)), 6);
+      this.wallMat.emissive.setHex(th.pulse.color);
+      this.wallMat.emissiveIntensity = 0.25 + th.pulse.amount * (0.35 * k + 0.9 * beat);
+    } else if (th.id === "arcade") {
+      this.wallMat.emissiveIntensity = 1.25 + 0.2 * Math.sin(t * 7) + (hash2(Math.floor(t * 12), 3, 9) > 0.96 ? -0.6 : 0);
+    }
+    for (let i = 0; i < this.screens.length; i++) {
+      this.screens[i].color.setScalar(0.6 + 0.4 * (0.5 + 0.5 * Math.sin(t * 17 + i * 2.3)) * (hash2(Math.floor(t * 15), i, 7) > 0.1 ? 1 : 0.3));
+    }
+    for (let i = 0; i < this.glands.length; i++) this.glands[i].scale.setScalar(1 + 0.18 * Math.sin(t * 2.1 + i));
+    if (this.waterNormal) this.waterNormal.offset.set(t * 0.012, t * 0.007);
 
     // polvo
     const pos = this.dust.geometry.getAttribute("position") as THREE.BufferAttribute;
@@ -352,5 +405,6 @@ export class LevelView {
   dispose(): void {
     disposeObject(this.group);
     this.group.clear();
+    this.waterNormal?.dispose();
   }
 }

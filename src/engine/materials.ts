@@ -70,6 +70,12 @@ export function surfaceMaterial(
     metalness: 0,
     ...extra,
   });
+  if (t.emissive) {
+    m.emissiveMap = t.emissive;
+    t.emissive.repeat.set(repeat[0], repeat[1]);
+    if (!extra.emissive) m.emissive = new THREE.Color(0xffffff);
+    if (extra.emissiveIntensity === undefined) m.emissiveIntensity = 1.2;
+  }
   if (macro) addMacroVariation(m, macro);
   return m;
 }
