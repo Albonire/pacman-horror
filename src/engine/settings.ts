@@ -1,5 +1,7 @@
 // Ajustes del usuario y progreso guardado (localStorage con tolerancia a fallos).
 
+import { CAMPAIGN } from "../config/campaign";
+
 export type ScareLevel = "full" | "reduced" | "off";
 export type Quality = "high" | "medium" | "low";
 export type ControlMode = "mouse" | "keyboard";
@@ -87,5 +89,21 @@ export function sanitizeSettings(s: Settings): Settings {
 
 export function loadSettings(): Settings { return sanitizeSettings(read(SETTINGS_KEY, DEFAULT_SETTINGS)); }
 export function saveSettings(s: Settings): void { write(SETTINGS_KEY, s); }
-export function loadProgress(): Progress { return read(PROGRESS_KEY, DEFAULT_PROGRESS); }
+/** Descarta valores corruptos del almacenamiento (tipos erroneos, niveles fuera de rango). */
+export function sanitizeProgress(p: Progress, levelCount: number): Progress {
+  const num = (v: unknown, d: number): number => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : d);
+  const best: Record<string, number> = {};
+  if (p.bestScoreByLevel && typeof p.bestScoreByLevel === "object") {
+    for (const [k, v] of Object.entries(p.bestScoreByLevel)) if (/^\d+$/.test(k) && Number(k) < levelCount) best[k] = num(v, 0);
+  }
+  return {
+    highScore: num(p.highScore, 0),
+    unlocked: clamp(Math.floor(num(p.unlocked, 0)), 0, Math.max(0, levelCount - 1)),
+    bestScoreByLevel: best,
+    warningAccepted: p.warningAccepted === true,
+    completedRuns: Math.floor(num(p.completedRuns, 0)),
+  };
+}
+
+export function loadProgress(): Progress { return sanitizeProgress(read(PROGRESS_KEY, DEFAULT_PROGRESS), CAMPAIGN.length); }
 export function saveProgress(p: Progress): void { write(PROGRESS_KEY, p); }
