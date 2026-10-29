@@ -13,6 +13,8 @@ export interface PlayerInput {
   sonar: boolean;
   /** Un mordisco pedido en este tick (flanco, no nivel). */
   bite?: boolean;
+  /** Pulsacion de interactuar (esconderse, palanca) en este tick. */
+  interact?: boolean;
 }
 
 export const NO_INPUT: PlayerInput = { forward: 0, strafe: 0, sprint: false, sonar: false };

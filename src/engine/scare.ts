@@ -104,6 +104,8 @@ const DEATH_FRAMES: { a: number; b: number; v: ScareVariant; z: number }[] = [
   { a: 0.86, b: 0.89, v: "eyes", z: 1.0 },
   { a: 0.89, b: 0.93, v: "mouth", z: 1.25 },
   { a: 0.93, b: 1.0, v: "full", z: 1.55 },
+  { a: 1.05, b: 1.09, v: "neg", z: 1.4 },
+  { a: 1.09, b: 1.18, v: "mouth", z: 1.75 },
 ];
 
 
@@ -181,6 +183,7 @@ export class ScareSystem {
     this.startTarget.copy(eye).addScaledVector(forward, 3);
     this.headTarget.set(view.group.position.x, view.faceY + 0.1, view.group.position.z);
     view.forceScream();
+    this.d.audio.duck?.(0.04, 0.55); // un instante de silencio antes del impacto
     this.d.audio.playDeathScream(kind);
     this.d.rig.override = { pos: this.eye.clone(), target: this.startTarget.clone(), fov: 78, roll: 0 };
     this.resize();
@@ -229,7 +232,7 @@ export class ScareSystem {
       const f = DEATH_FRAMES[fr];
       if (fr !== this.lastFrame) {
         this.lastFrame = fr;
-        if (fr === 0 || fr === 4) this.d.audio.playScareHit(fr === 0 ? 1 : 1.2);
+        if (fr === 0 || fr === 4 || fr === 7) this.d.audio.playScareHit(fr === 0 ? 1 : fr === 4 ? 1.2 : 1.35);
         this.frameSeed = Math.floor(Math.random() * 1e6);
       }
       drawScreamFrame(ctx, c.width, c.height, this.face(this.deathKind), f.v, f.z + (t - f.a) * 0.5, this.frameSeed + Math.floor(t * 60));
@@ -239,8 +242,8 @@ export class ScareSystem {
       this.lastFrame = -1;
       c.style.transform = "";
     }
-    if (t >= 1.15) {
-      const k = Math.min(1, (t - 1.15) / 0.9);
+    if (t >= 1.2) {
+      const k = Math.min(1, (t - 1.2) / 0.9);
       fx.staticNoise = 0.9 * (1 - k * 0.5);
       fx.blackout = k * k;
     }

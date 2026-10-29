@@ -30,6 +30,18 @@ export class HorrorAudio implements GameAudio {
   private breath = new BreathEngine();
   private voices = new Map<number, GhostVoice>();
   private suspended = false;
+  /** Estado que queremos: el contexto debe estar sonando salvo durante la pausa. */
+  private wantRunning = false;
+  private chain: Promise<void> = Promise.resolve();
+  private watchdog: number | null = null;
+  private meterTimer: number | null = null;
+  private silentFor = 0;
+  private lastRebuild = -100;
+  private pending: { fn: (S: Synth) => void; mix: number; t: number }[] = [];
+  private buf: Float32Array<ArrayBuffer> | null = null;
+  private gestureBound = false;
+  onStatus?: (msg: string) => void;
+  lastPeak = 0;
 
   /** `factory` y `assumeRunning` permiten pruebas con un OfflineAudioContext. */
   constructor(private factory?: () => AudioContext, private assumeRunning = false) {}
@@ -41,14 +53,116 @@ export class HorrorAudio implements GameAudio {
       this.S.setVolume(this.volume);
       this.S.setMuted(this.muted);
       this.startLayers();
+      this.startWatching();
     }
     this.suspended = false;
-    if (!this.assumeRunning && this.S.ctx.state !== "running") void this.S.ctx.resume();
+    this.wantRunning = true;
+    this.apply();
   }
 
   suspend(): void {
     this.suspended = true;
-    if (this.S && this.S.ctx.state === "running") void this.S.ctx.suspend();
+    this.wantRunning = false;
+    this.apply();
+  }
+
+  /**
+   * Lleva el contexto al estado deseado. Las peticiones se serializan: pausar y reanudar muy seguido ya no deja
+   * el contexto suspendido (antes, `resume()` miraba un estado que `suspend()` todavia no habia aplicado).
+   */
+  private apply(): void {
+    if (this.assumeRunning) return;
+    this.chain = this.chain.then(async () => {
+      const ctx = this.S?.ctx;
+      if (!ctx || ctx.state === "closed") return;
+      try {
+        if (this.wantRunning) { if (ctx.state !== "running") await ctx.resume(); }
+        else if (ctx.state === "running") await ctx.suspend();
+      } catch { /* sin gesto del usuario: el vigilante reintentara */ }
+    });
+  }
+
+  private startWatching(): void {
+    if (this.assumeRunning || typeof window === "undefined") return;
+    if (this.watchdog === null) this.watchdog = window.setInterval(() => this.watch(), 1000);
+    if (this.meterTimer === null) this.meterTimer = window.setInterval(() => this.meter(0.5), 500);
+    if (!this.gestureBound) {
+      this.gestureBound = true;
+      for (const ev of ["keydown", "pointerdown", "focus"]) window.addEventListener(ev, this.kick, true);
+      document.addEventListener("visibilitychange", this.kick);
+      document.addEventListener("pointerlockchange", this.kick);
+    }
+  }
+
+  private stopWatching(): void {
+    if (this.watchdog !== null) window.clearInterval(this.watchdog);
+    if (this.meterTimer !== null) window.clearInterval(this.meterTimer);
+    this.watchdog = null; this.meterTimer = null;
+    if (this.gestureBound) {
+      this.gestureBound = false;
+      for (const ev of ["keydown", "pointerdown", "focus"]) window.removeEventListener(ev, this.kick, true);
+      document.removeEventListener("visibilitychange", this.kick);
+      document.removeEventListener("pointerlockchange", this.kick);
+    }
+  }
+
+  /** Cualquier gesto del usuario es una oportunidad para reanudar un contexto que el navegador haya detenido. */
+  private kick = (): void => {
+    if (this.wantRunning && this.S && this.S.ctx.state !== "running") this.apply();
+  };
+
+  /** Vigilante (1 Hz): reanuda un contexto detenido por el navegador y reconstruye uno cerrado. */
+  private watch(): void {
+    const S = this.S;
+    if (!S || !this.wantRunning) return;
+    const st = S.ctx.state as string;
+    if (st === "closed") { this.rebuild("el contexto se cerro"); return; }
+    if (st !== "running") { this.apply(); return; }
+    // vacia los efectos que llegaron mientras el contexto estaba parado (si no son muy viejos)
+    const now = performance.now();
+    const todo = this.pending.splice(0);
+    for (const e of todo) if (now - e.t < 1500) this.with(e.fn, e.mix);
+  }
+
+  /** Mide la salida: NaN/Inf o silencio absoluto sostenido significan que el grafo se rompio. */
+  private meter(dt: number): void {
+    const S = this.S;
+    if (!S || !this.wantRunning || S.ctx.state !== "running") { this.silentFor = 0; return; }
+    if (!this.buf) this.buf = new Float32Array(S.analyser.fftSize) as Float32Array<ArrayBuffer>;
+    S.analyser.getFloatTimeDomainData(this.buf);
+    let peak = 0, bad = false;
+    for (let i = 0; i < this.buf.length; i++) {
+      const v = this.buf[i];
+      if (!Number.isFinite(v)) { bad = true; break; }
+      const a = Math.abs(v);
+      if (a > peak) peak = a;
+    }
+    this.lastPeak = Math.max(peak, this.lastPeak * 0.8);
+    const audible = !this.muted && this.volume > 0.01;
+    this.silentFor = audible && peak === 0 ? this.silentFor + dt : 0;
+    if (bad) this.rebuild("salida con NaN");
+    else if (this.silentFor > 4) this.rebuild("silencio absoluto");
+  }
+
+  /** Crea un grafo nuevo (y un AudioContext nuevo) conservando volumen, silencio y tema. */
+  private rebuild(reason: string): void {
+    const now = typeof performance !== "undefined" ? performance.now() / 1000 : 0;
+    if (now - this.lastRebuild < 8) return;
+    this.lastRebuild = now;
+    console.warn(`[audio] reiniciando: ${reason}`);
+    const old = this.S;
+    this.S = null;
+    this.ambience = null; this.drone = null; this.siren = null; this.dread = null;
+    for (const v of this.voices.values()) { try { v.dispose(); } catch { /* ya parado */ } }
+    this.voices.clear();
+    if (old) { try { void old.ctx.close(); } catch { /* ya cerrado */ } }
+    this.silentFor = 0; this.pending = []; this.buf = null; this.lastPeak = 0;
+    try { this.S = new Synth(this.factory?.()); } catch { return; }
+    this.S.setVolume(this.volume);
+    this.S.setMuted(this.muted);
+    this.startLayers();
+    this.apply();
+    this.onStatus?.("Audio reiniciado");
   }
 
   private startLayers(): void {
@@ -78,7 +192,8 @@ export class HorrorAudio implements GameAudio {
 
   update(f: AudioFrame): void {
     const S = this.S;
-    if (!S || this.suspended || (!this.assumeRunning && S.ctx.state !== "running")) return;
+    if (!S || this.suspended) return;
+    if (!this.assumeRunning && S.ctx.state !== "running") { this.kick(); return; }
     S.setListener(f.listener.x, f.listener.y, f.listener.z, f.listener.fx, f.listener.fy, f.listener.fz);
     this.ambience?.update(f.dt);
     this.drone?.update(f.tension);
@@ -95,7 +210,12 @@ export class HorrorAudio implements GameAudio {
   /** Ejecuta un efecto aplicando su ajuste de mezcla (ver MIX). */
   private with(fn: (S: Synth) => void, mix = 1): void {
     const S = this.S;
-    if (!S || (!this.assumeRunning && S.ctx.state !== "running")) return;
+    if (!S) return;
+    if (!this.assumeRunning && S.ctx.state !== "running") {
+      // contexto parado por el navegador: se intenta reanudar y el efecto espera un instante
+      if (this.wantRunning && this.pending.length < 8) { this.pending.push({ fn, mix, t: performance.now() }); this.kick(); }
+      return;
+    }
     S.trim = mix;
     try { fn(S); } finally { S.trim = 1; }
   }
@@ -130,6 +250,7 @@ export class HorrorAudio implements GameAudio {
   playFootsteps(x: number, y: number, z: number): void { this.with((S) => fx.footsteps(S, x, y, z)); }
   playBlackout(on: boolean): void { this.with((S) => fx.blackout(S, on)); }
   playScreamerFlash(): void { this.with((S) => fx.screamerFlash(S), MIX.screamerFlash); }
+  duck(level: number, secs: number): void { this.S?.duck(level, secs); }
   playHeartbeat(strength: number): void { this.with((S) => fx.heartbeat(S, strength), MIX.heartbeat); }
   playScareHit(strength: number): void { this.with((S) => fx.scareHit(S, strength), MIX.scareHit); }
   playDread(kind: string): void {
@@ -137,6 +258,8 @@ export class HorrorAudio implements GameAudio {
   }
 
   dispose(): void {
+    this.stopWatching();
+    this.wantRunning = false;
     for (const v of this.voices.values()) v.dispose();
     this.voices.clear();
     this.ambience?.stop(0.1);

@@ -8,6 +8,11 @@
 //   bang        golpe seco en una pared cercana
 //   whisper     susurro muy cerca del oido
 //   face        cara relampago a pantalla completa (solo sustos completos)
+//   rush        una figura aparece al fondo, aguarda y se lanza hacia la camara (no letal)
+//   peripheral  silueta en el borde del campo de vision que desaparece si la miras
+//   falseAlarm  pasos y arrastres que se acercan y no traen nada
+//
+// Ritmo: calma larga -> silencio previo (el audio se atenua) -> golpe. El silencio es parte del susto.
 
 import type { GameAudio } from "../audio/types";
 import type { FaceKind } from "../gfx/faces";
@@ -29,9 +34,11 @@ export interface DirectorHost {
   apparition: (kind: FaceKind) => GhostView;
   setLightsMul: (v: number) => void;
   hudMessage: (t: string) => void;
+  /** 0..1: cuan dentro de una zona oscura esta el jugador. */
+  darkness: () => number;
 }
 
-type EventKind = "apparition" | "behind" | "blackout" | "bang" | "whisper" | "face";
+type EventKind = "apparition" | "behind" | "blackout" | "bang" | "whisper" | "face" | "rush" | "peripheral" | "falseAlarm";
 
 interface Active {
   kind: EventKind;
@@ -71,9 +78,13 @@ export class ScareDirector {
 
   private pickKind(): EventKind {
     const s = this.h.settings().scares;
-    const w: [EventKind, number][] = [["apparition", 30], ["behind", 20], ["bang", 15], ["whisper", 14]];
-    if (s !== "reduced") w.push(["blackout", 14]);
+    const dark = this.h.darkness() > 0.4 ? 2 : 1;
+    const w: [EventKind, number][] = [
+      ["apparition", 22], ["behind", 14 * dark], ["bang", 11], ["whisper", 11], ["peripheral", 14 * dark], ["falseAlarm", 14],
+    ];
+    if (s !== "reduced") w.push(["blackout", 12]);
     if (s === "full") w.push(["face", 6]);
+    if (s !== "off") w.push(["rush", 9 * dark]);
     // evita repetir el mismo evento tres veces seguidas
     const filtered = w.filter(([k]) => !(this.recent.length >= 2 && this.recent[0] === k && this.recent[1] === k));
     const total = filtered.reduce((a, [, v]) => a + v, 0);
@@ -94,7 +105,7 @@ export class ScareDirector {
 
   private schedule(): void {
     const scale = Math.max(0.2, this.h.ambientScale());
-    this.nextAt = this.clock + (20 + Math.random() * 22) / scale;
+    this.nextAt = this.clock + (24 + Math.random() * 30) / scale;
   }
 
   private start(kind: EventKind): void {
@@ -103,15 +114,18 @@ export class ScareDirector {
     this.recent.unshift(kind);
     this.recent.length = Math.min(this.recent.length, 3);
     const ghostKind = (Math.floor(Math.random() * 4)) as FaceKind;
+    // silencio previo: el ambiente y la musica bajan antes de los sustos que se ven
+    if (kind === "apparition" || kind === "rush" || kind === "face" || kind === "peripheral" || kind === "behind") audio.duck?.(0.12, 1.8);
+    else if (kind === "falseAlarm") audio.duck?.(0.18, 3.2);
     switch (kind) {
       case "apparition": {
-        const cell = this.findCell(8, 16, 38, true);
+        const cell = this.findCell(8, 16, 0, 38);
         if (!cell) { this.nextAt = this.clock + 5; return; }
         this.begin({ kind, t: 0, data: { x: cell.x, z: cell.z, phase: 0 }, ghost: ghostKind });
         break;
       }
       case "behind": {
-        const cell = this.findCell(3.5, 6, 150, false);
+        const cell = this.findCell(3.5, 6, 150, 180);
         const withApp = !!cell && Math.random() < 0.55;
         this.begin({ kind, t: 0, data: { x: cell?.x ?? p.x, z: cell?.z ?? p.z, app: withApp ? 1 : 0, shown: 0 }, ghost: ghostKind });
         const [bx, bz] = this.behindVec();
@@ -138,9 +152,26 @@ export class ScareDirector {
         break;
       }
       case "face":
-        this.h.scare.flashFace(ghostKind, 0.26);
-        this.begin({ kind, t: 0, data: {} });
+        this.begin({ kind, t: 0, data: { fired: 0 }, ghost: ghostKind });
         break;
+      case "rush": {
+        const cell = this.findCell(9, 15, 0, 28);
+        if (!cell) { this.nextAt = this.clock + 5; audio.duck?.(1, 0.1); return; }
+        this.begin({ kind, t: 0, data: { x: cell.x, z: cell.z, phase: 0 }, ghost: ghostKind });
+        break;
+      }
+      case "peripheral": {
+        const cell = this.findCell(7, 13, 42, 78);
+        if (!cell) { this.nextAt = this.clock + 5; audio.duck?.(1, 0.1); return; }
+        this.begin({ kind, t: 0, data: { x: cell.x, z: cell.z, seen: 0 }, ghost: ghostKind });
+        break;
+      }
+      case "falseAlarm": {
+        const [bx, bz] = this.behindVec();
+        audio.playFootsteps(p.x + bx * 7, 0.1, p.z + bz * 7);
+        this.begin({ kind, t: 0, data: { scrape: 0 } });
+        break;
+      }
     }
   }
 
@@ -154,8 +185,8 @@ export class ScareDirector {
     return [-fx, -fz];
   }
 
-  /** Busca una celda con linea de vision, a cierta distancia y angulo respecto a la vista. */
-  private findCell(minD: number, maxD: number, maxAngleDeg: number, ahead: boolean): { x: number; z: number } | null {
+  /** Busca una celda con linea de vision, a cierta distancia y con un angulo (en grados) entre minAng y maxAng respecto a la vista. */
+  private findCell(minD: number, maxD: number, minAng: number, maxAng: number): { x: number; z: number } | null {
     const { sim } = this.h;
     const m = sim.maze, p = sim.player;
     const [fx, fz] = p.forwardVec();
@@ -170,7 +201,7 @@ export class ScareDirector {
         if (d < minD || d > maxD) continue;
         const dot = (fx * dx + fz * dz) / d;
         const ang = (Math.acos(Math.max(-1, Math.min(1, dot))) * 180) / Math.PI;
-        if (ahead ? ang > maxAngleDeg : ang < maxAngleDeg) continue;
+        if (ang < minAng || ang > maxAng) continue;
         if (!m.rayClear(p.x, p.z, w.x, w.z)) continue;
         // no sobre un fantasma real
         if (sim.ghosts.some((g) => g.mode !== "dormant" && Math.hypot(g.x - w.x, g.z - w.z) < 3)) continue;
@@ -257,6 +288,77 @@ export class ScareDirector {
         else if (a.t < dur) this.setMul(0);
         else if (a.t < dur + 0.35) this.setMul(Math.sin(a.t * 60) > 0 ? 1 : 0.05);
         else { this.setMul(1); audio.playBlackout(true); this.finish(); }
+        break;
+      }
+      case "face": {
+        // 0,7 s de silencio y entonces el destello (con golpe y grito sincronizados)
+        if (!a.data.fired && a.t > 0.7) {
+          a.data.fired = 1;
+          this.h.scare.flashFace(a.ghost!, 0.3);
+          audio.playScareHit(0.9);
+        }
+        if (a.t > 1.3) this.finish();
+        break;
+      }
+      case "rush": {
+        const x = a.data.x, z = a.data.z;
+        if (a.data.phase === 0) {
+          this.setMul(Math.sin(a.t * 80) > 0 ? 1 : 0.04);
+          if (a.t > 0.45) {
+            a.data.phase = 1; a.t = 0;
+            this.setMul(0.35);
+            this.show(a.ghost!, x, z);
+            audio.playStinger(0.4);
+          }
+        } else if (a.data.phase === 1 && this.fake) {
+          // espera inmovil, mirandote; se oye una respiracion lenta
+          this.fake.view.setGhostly(0.8);
+          this.fake.g.yaw = Math.atan2(p.x - this.fake.g.x, p.z - this.fake.g.z);
+          if (a.t > 0.7 + (a.data.hold ?? 0.5)) { a.data.phase = 2; a.t = 0; audio.playScareHit(0.5); }
+        } else if (a.data.phase === 2 && this.fake) {
+          // embestida en linea recta hacia la camara
+          const g = this.fake.g;
+          const dx = p.x - g.x, dz = p.z - g.z, d = Math.hypot(dx, dz) || 1;
+          const step = Math.min(d, 17 * dt);
+          g.x += (dx / d) * step; g.z += (dz / d) * step;
+          g.yaw = Math.atan2(dx, dz);
+          this.fake.view.setGhostly(1);
+          if (d < 1.4 || a.t > 1.4) {
+            this.hide();
+            this.h.scare.flashFace(a.ghost!, 0.22);
+            audio.playScareHit(1.1);
+            this.h.rig.addTrauma(0.85);
+            this.setMul(0.05);
+            a.data.phase = 3; a.t = 0;
+          }
+        } else if (a.data.phase === 3) {
+          if (a.t > 0.5) { this.setMul(1); this.finish(); }
+        } else if (a.t > 4) { this.setMul(1); this.finish(); }
+        break;
+      }
+      case "peripheral": {
+        const x = a.data.x, z = a.data.z;
+        if (!this.fake && !a.data.shown) {
+          if (a.t > 0.6) { a.data.shown = 1; this.show(a.ghost!, x, z); this.fake!.view.setGhostly(0.5); }
+        } else if (this.fake) {
+          const { deg, dist } = this.angleToward(x, z);
+          this.fake.g.yaw = Math.atan2(p.x - x, p.z - z);
+          this.fake.view.setGhostly(0.45 + 0.1 * Math.sin(a.t * 3));
+          // al mirarla (o acercarte) se esfuma sin ruido... y luego un susurro justo a tu oido
+          if (deg < 24) this.lookT += dt; else this.lookT = 0;
+          if (this.lookT > 0.3 || dist < 3.5 || a.t > 9) {
+            this.hide();
+            if (this.lookT > 0.3) { this.setMul(0.2); audio.playWhisper(p.x + 0.2, 0.9, p.z); }
+            a.data.gone = 1; a.t = 0;
+          }
+        } else if (a.data.gone) {
+          if (a.t > 0.3) { this.setMul(1); this.finish(); }
+        } else if (a.t > 3) this.finish();
+        break;
+      }
+      case "falseAlarm": {
+        if (!a.data.scrape && a.t > 2.2) { a.data.scrape = 1; audio.playDread?.("scrape"); }
+        if (a.t > 3.2) this.finish();
         break;
       }
       case "bang":

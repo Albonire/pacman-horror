@@ -62,6 +62,8 @@ export class Synth {
   readonly pink: AudioBuffer;
   readonly brown: AudioBuffer;
   readonly dist: WaveShaperNode;
+  /** Medidor tras el limitador (detecta silencio muerto o NaN). */
+  readonly analyser: AnalyserNode;
   private volume = 0.8;
   private muted = false;
   /** Multiplicador de mezcla temporal para el efecto en curso (ver tabla MIX del motor). */
@@ -91,6 +93,9 @@ export class Synth {
     this.master.connect(this.comp);
     this.comp.connect(clip);
     clip.connect(ctx.destination);
+    this.analyser = ctx.createAnalyser();
+    this.analyser.fftSize = 1024;
+    clip.connect(this.analyser);
 
     this.sfx = ctx.createGain(); this.sfx.gain.value = 1.25;
     this.amb = ctx.createGain(); this.amb.gain.value = 0.25;
@@ -118,6 +123,16 @@ export class Synth {
   }
 
   get now(): number { return this.ctx.currentTime; }
+
+  /** Baja ambiente y musica durante `secs` (silencio previo a un susto) y los devuelve con una subida lenta. */
+  duck(level: number, secs: number, release = 1.4): void {
+    const t = this.now;
+    for (const [bus, base] of [[this.amb, 0.25], [this.music, 0.8]] as const) {
+      bus.gain.cancelScheduledValues(t);
+      bus.gain.setTargetAtTime(base * level, t, 0.08);
+      bus.gain.setTargetAtTime(base, t + secs, release / 3);
+    }
+  }
 
   setVolume(v: number): void { this.volume = v; this.applyGain(); }
   setMuted(m: boolean): void { this.muted = m; this.applyGain(); }

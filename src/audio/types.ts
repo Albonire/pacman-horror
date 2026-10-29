@@ -33,6 +33,12 @@ export interface AudioFrame {
 
 /** Superficie de audio que usa el motor. Implementada por HorrorAudio (Web Audio) y NullAudio (silencio). */
 export interface GameAudio {
+  /** Aviso de estado del audio (p. ej. reinicio tras un fallo). */
+  onStatus?: (msg: string) => void;
+  /** Pico reciente de la salida (solo depuracion). */
+  readonly lastPeak?: number;
+  /** Baja ambiente y musica un instante antes de un susto. */
+  duck?(level: number, secs: number): void;
   resume(): void;
   suspend(): void;
   setVolume(v: number): void;

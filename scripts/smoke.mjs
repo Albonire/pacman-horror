@@ -102,6 +102,15 @@ try {
   await page.keyboard.press("KeyF");
   check("F apaga y enciende la linterna", lightOff);
 
+  // audio: el contexto suspendido por el navegador se recupera solo, y un grafo roto se reconstruye
+  const audioState = () => page.evaluate(() => window.__umbral.audio.S && window.__umbral.audio.S.ctx.state);
+  const ctxRunning = await page.waitForFunction(() => window.__umbral.audio.S && window.__umbral.audio.S.ctx.state === "running", { timeout: 20000 }).then(() => true, () => false);
+  check("el audio esta sonando durante la partida", ctxRunning, String(await audioState()));
+  await page.evaluate(() => window.__umbral.audio.S.ctx.suspend());
+  check("un contexto de audio suspendido se reanuda solo", await page.waitForFunction(() => window.__umbral.audio.S.ctx.state === "running", { timeout: 15000 }).then(() => true, () => false));
+  await page.evaluate(() => { window.__ctxBefore = window.__umbral.audio.S.ctx; window.__umbral.audio.S.master.disconnect(); });
+  check("si el grafo se rompe (silencio absoluto) el audio se reconstruye", await page.waitForFunction(() => window.__umbral.audio.S && window.__umbral.audio.S.ctx !== window.__ctxBefore && window.__umbral.audio.S.ctx.state === "running", { timeout: 40000 }).then(() => true, () => false));
+
   // pausa y ajustes
   await page.keyboard.press("Escape");
   check("Escape pausa", await waitPhase("paused", 10000));
@@ -121,8 +130,10 @@ try {
     return true;
   });
   check("preparar la muerte", died);
+  await page.evaluate(() => { window.__peak = 0; setInterval(() => { window.__peak = Math.max(window.__peak, window.__umbral.audio.lastPeak || 0); }, 50); });
   check("el fantasma atrapa y empieza el susto de muerte", await waitPhase("dying", 40000));
   check("el screamer 2D se muestra durante la muerte", await page.waitForFunction(() => window.__scareSeen === true, { timeout: 60000 }).then(() => true, () => false));
+  check("el grito del susto de muerte suena (pico de salida > 0,15)", await page.evaluate(() => window.__peak) > 0.15, String(await page.evaluate(() => window.__peak)));
   check("tras el susto se pierde una vida y se reaparece", await waitPhase("playing", 90000) && await page.evaluate(() => window.__umbral.sim.lives < window.__umbral.sim.diff.lives));
 
   // victoria

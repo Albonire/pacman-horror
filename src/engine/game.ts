@@ -152,6 +152,7 @@ export class Game {
     this.progress = init.progress ?? { ...DEFAULT_PROGRESS };
     this.audio = init.audio ?? new HorrorAudio();
     this.manual = !!init.manual;
+    this.audio.onStatus = (m) => this.hud.message(m, 2.4, "warn");
 
     const w = Math.max(2, this.container.clientWidth), h = Math.max(2, this.container.clientHeight);
     this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance", alpha: false });
@@ -480,6 +481,7 @@ export class Game {
       apparition: (kind) => this.apparitions.get(kind)!,
       setLightsMul: (v) => { this.lightsMul = v; },
       hudMessage: (t) => this.hud.message(t, 2, "warn"),
+      darkness: () => this.darkness,
     });
     this.applyTheme(theme);
     this.audio.setTheme(level.theme);
@@ -545,6 +547,8 @@ export class Game {
 
   private biteReq = false;
   private freezeHintShown = false;
+  /** Cuan dentro de una zona oscura esta el jugador (0..1, suavizado). */
+  private darkness = 0;
   private bite(): void {
     if (this.phase !== "playing") return;
     this.jaws.chomp(0.62);

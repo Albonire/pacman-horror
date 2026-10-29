@@ -31,7 +31,17 @@ export interface LevelLayout {
   center: Cell;
   deadEnds: Cell[];
   totalDots: number;
+  /** Zonas oscuras: sin luminarias hasta que se enciende su interruptor. `r` en celdas. */
+  zones: DarkZone[];
+  /** Pilas recogibles (recargan la linterna). */
+  batteries: Cell[];
+  /** Cajas de fusibles: encienden la zona oscura asociada. */
+  switches: { cell: Cell; zone: number; wall: Cell }[];
+  /** Escondites junto a una pared (`wall` apunta de la celda hacia el hueco). */
+  hideSpots: { cell: Cell; wall: Cell }[];
 }
+
+export interface DarkZone { cell: Cell; r: number }
 
 type Grid = boolean[][]; // true = corredor
 
@@ -86,6 +96,9 @@ function tempMaze(g: Grid, W: number, H: number, tunnelRow: number): Maze {
   const rows = gridToRows(g, W, H, () => ".");
   return new Maze({ grid: rows, W, H, tunnelRow, exit: [0, 0], exitDir: [0, 1] });
 }
+
+/** Estimacion rapida de puntos antes de generar la cuadricula final (casi todas las celdas abiertas llevan uno). */
+function totalDotsEstimate(openCells: number): number { return openCells - 12; }
 
 function build(spec: LayoutSpec, seed: number): LevelLayout | null {
   const { W, H } = spec;
@@ -190,6 +203,60 @@ function build(spec: LayoutSpec, seed: number): LevelLayout | null {
   const fruit = nearestTo(open2.filter((o) => isFree(o) && o[1] !== tunnelRow), cx, cy + 4);
   if (!fruit) return null;
 
+  // ---- extras de jugabilidad (despues de todo lo anterior: no alteran el laberinto ni su semilla) ----
+  const eu = (a: Cell, b: Cell) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const freeCells = () => open2.filter((o) => isFree(o) && o[1] !== tunnelRow);
+  const area = W * H;
+  const zoneCount = area >= 650 ? 4 : area >= 480 ? 3 : 2;
+  const zones: DarkZone[] = [];
+  const zr = 3.2;
+  const zoneCands = shuffle(rng, freeCells());
+  for (const relax of [0, 3]) {
+    for (const c of zoneCands) {
+      if (zones.length >= zoneCount) break;
+      if (eu(c, player) < 8 - relax || eu(c, exit) < 6 - relax) continue;
+      if (zones.some((z) => eu(z.cell, c) < 9 - relax)) continue;
+      zones.push({ cell: c, r: zr });
+    }
+  }
+  const switches: { cell: Cell; zone: number; wall: Cell }[] = [];
+  const wallOf = (c: Cell): Cell | null => {
+    const w = DIRS.filter(([dx, dy]) => !g[c[1] + dy]?.[c[0] + dx]);
+    return w.length ? w[Math.floor(rng() * w.length)] : null;
+  };
+  zones.forEach((z, zi) => {
+    // interruptor en el borde de la zona
+    const ring = freeCells().filter((c) => { const d = eu(c, z.cell); return d >= z.r - 0.6 && d <= z.r + 1.8 && wallOf(c); });
+    const pick = ring.length ? ring[Math.floor(rng() * ring.length)] : null;
+    if (!pick) return;
+    take(pick);
+    switches.push({ cell: pick, zone: zi, wall: wallOf(pick)! });
+  });
+  const batteries: Cell[] = [];
+  const batteryCount = Math.max(3, Math.round(totalDotsEstimate(open2.length) / 80));
+  for (const z of zones) {
+    const near = freeCells().filter((c) => eu(c, z.cell) <= 2.2);
+    if (near.length && batteries.length < batteryCount) { const c = near[Math.floor(rng() * near.length)]; batteries.push(c); take(c); }
+  }
+  for (const c of shuffle(rng, freeCells())) {
+    if (batteries.length >= batteryCount) break;
+    if (eu(c, player) < 5 || batteries.some((b) => eu(b, c) < 5)) continue;
+    batteries.push(c); take(c);
+  }
+  const hideSpots: { cell: Cell; wall: Cell }[] = [];
+  const hideCount = Math.max(3, Math.round(open2.length / 38));
+  for (const c of shuffle(rng, freeCells())) {
+    if (hideSpots.length >= hideCount) break;
+    if (eu(c, player) < 3.5 || hideSpots.some((h) => eu(h.cell, c) < 5)) continue;
+    const wN = !g[c[1] - 1]?.[c[0]], wS = !g[c[1] + 1]?.[c[0]], wW = !g[c[1]]?.[c[0] - 1], wE = !g[c[1]]?.[c[0] + 1];
+    // pasillo recto de dos paredes opuestas: el armario va en una de ellas
+    let wall: Cell | null = null;
+    if (wN && wS && !wW && !wE) wall = rng() < 0.5 ? [0, -1] : [0, 1];
+    else if (wW && wE && !wN && !wS) wall = rng() < 0.5 ? [-1, 0] : [1, 0];
+    if (!wall) continue;
+    hideSpots.push({ cell: c, wall }); take(c);
+  }
+
   const exitNeighbors = DIRS.filter(([dx, dy]) => g[exit[1] + dy]?.[exit[0] + dx]);
   if (exitNeighbors.length !== 1) return null;
   const exitDir: Cell = [exitNeighbors[0][0], exitNeighbors[0][1]];
@@ -216,6 +283,7 @@ function build(spec: LayoutSpec, seed: number): LevelLayout | null {
     grid, W, H, tunnelRow, spec, resolvedSeed: seed,
     player, exit, exitDir, ghosts, pellets, fruit,
     center: [cx, cy], deadEnds, totalDots,
+    zones, batteries, switches, hideSpots,
   };
 }
 
@@ -256,6 +324,21 @@ export function validateLayout(l: LevelLayout): string[] {
     if (field[c[1] * W + c[0]] >= UNREACHABLE) issues.push("elemento inalcanzable en " + c.join(","));
   }
   if (l.totalDots < 60) issues.push("muy pocos puntos");
+  const reach = (c: Cell) => field[c[1] * W + c[0]] < UNREACHABLE && l.grid[c[1]][c[0]] !== "#";
+  if (l.zones.length < 2) issues.push("faltan zonas oscuras");
+  if (l.batteries.length < 3) issues.push("faltan pilas");
+  if (l.hideSpots.length < 3) issues.push("faltan escondites");
+  if (l.switches.length < 1) issues.push("falta un interruptor");
+  for (const z of l.zones) if (!reach(z.cell)) issues.push("zona inalcanzable");
+  for (const c of l.batteries) if (!reach(c)) issues.push("pila inalcanzable en " + c.join(","));
+  for (const sw of l.switches) {
+    if (!reach(sw.cell)) issues.push("interruptor inalcanzable");
+    if (l.grid[sw.cell[1] + sw.wall[1]]?.[sw.cell[0] + sw.wall[0]] !== "#") issues.push("interruptor sin pared");
+  }
+  for (const h of l.hideSpots) {
+    if (!reach(h.cell)) issues.push("escondite inalcanzable");
+    if (l.grid[h.cell[1] + h.wall[1]]?.[h.cell[0] + h.wall[0]] !== "#") issues.push("escondite sin pared");
+  }
   return issues;
 }
 
