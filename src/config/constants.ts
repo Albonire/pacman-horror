@@ -1,70 +1,59 @@
-// PROTOCOLO UMBRAL — constantes globales
+// UMBRAL: constantes globales de la simulacion y el render.
+// Unidades del mundo: metros aproximados. Las velocidades de fantasmas van en celdas/s.
 
-export const CELL = 1.7;          // tamaño de celda en unidades del mundo
-export const WALL_H = 2.7;        // altura de las paredes
-export const EYE_H = 1.55;        // altura de cámara en primera persona
+export const CELL = 2.4; // lado de una celda del laberinto
+export const WALL_H = 3.4; // altura de paredes
+export const EYE_H = 0.82; // altura de los ojos de Pac-Man (es bajito: todo se ve enorme)
 
-// Movimiento (celdas / segundo)
-export const PLAYER_SPEED = 5.1;
-export const PLAYER_RUN_SPEED = 7.3;
-export const GHOST_SPEED = 4.55;
-export const GHOST_FRIGHT_SPEED = 2.7;
-export const GHOST_EATEN_SPEED = 8.6;
+// ---------------- Jugador ----------------
+export const PLAYER_RADIUS = 0.34;
+export const PLAYER_WALK = 3.7; // u/s
+export const PLAYER_RUN = 5.8; // u/s
+export const PLAYER_ACCEL = 26; // u/s^2
+export const PLAYER_DECEL = 34; // u/s^2
+export const SONAR_SLOW = 0.5; // multiplicador de velocidad con el sonar abierto
 
-// Estados / tiempos (segundos)
-export const FRIGHT_TIME = 10;
-export const EATEN_RESPAWN_TIME = 4.5;
-export const INVULN_TIME = 2.2;
-export const POWER_HOLD_TIME = 1.5;
-export const RADAR_PING_INTERVAL = 2.0;
-export const RADAR_SLOW = 0.42;
-export const STAMINA_PANT_TIME = 3.0;
-
-// Jugador
-export const PLAYER_LIVES = 3;
 export const STAMINA_MAX = 100;
-export const STAMINA_DRAIN = 30;     // por seg corriendo
-export const STAMINA_RECOVER = 24;   // por seg quieto/caminando
+export const STAMINA_DRAIN = 20; // por segundo corriendo
+export const STAMINA_RECOVER = 16; // por segundo sin correr
+export const STAMINA_EXHAUST_BELOW = 0; // al llegar a 0 queda agotado
+export const STAMINA_RESUME_AT = 25; // se puede volver a correr al recuperar esto
+
 export const BATTERY_MAX = 100;
-export const BATTERY_DRAIN = 3.5;    // por seg con linterna encendida
-export const BATTERY_RECOVER = 6.5;  // por seg con linterna apagada
-export const BATTERY_STARE_DRAIN = 9; // drenaje extra al mirar al Estático
+export const BATTERY_DRAIN = 2.3; // por segundo con la luz encendida
+export const BATTERY_RECOVER = 5.5; // por segundo con la luz apagada
+export const BATTERY_STARE_DRAIN = 5; // extra mientras el Estatico esta congelado
 
-// Interacción (en celdas)
-export const INTERACT_RANGE = 1.15;
-export const DOT_COLLECT_RANGE = 0.6;
-export const GHOST_TOUCH_RANGE = 0.66;
+// ---------------- Fantasmas ----------------
+export const GHOST_RADIUS = 0.5;
+export const GHOST_CATCH_DIST = 0.82; // distancia centro a centro que cuenta como atrapado
+export const GHOST_SPEED_BASE = 1.25; // celdas/s
+export const GHOST_FRIGHT_FACTOR = 0.55;
+export const GHOST_EATEN_SPEED = 3.4; // celdas/s
+export const GHOST_TUNNEL_FACTOR = 0.7;
+export const GHOST_HEAR_RADIUS = 9; // celdas (distancia BFS)
 
-// IA
-export const GHOST_HEAR_RADIUS = 10;
-export const RADAR_NOISE_RADIUS = 8;
-export const RUN_NOISE_RADIUS = 6;
-export const ESTATICO_FREEZE_RANGE = 11;
-export const ESTATICO_STARE_LIMIT = 4.0; // seg mirando para drenar batería extra
+// ---------------- Mecanicas ----------------
+export const DOT_EAT_RANGE = 0.78;
+export const PELLET_EAT_RANGE = 0.95;
+export const FRUIT_EAT_RANGE = 0.95;
+export const EXTRA_LIFE_SCORE = 10000;
+export const RESPAWN_GRACE = 5; // segundos sin fantasmas activos tras reaparecer
+export const INVULN_TIME = 2.0;
+export const SONAR_PING_INTERVAL = 2.0;
 
-// Niveles: semilla y prob. de bucles (más bucles = más flanqueo)
-export const LEVELS: { seed: number; loopChance: number }[] = [
-  { seed: 7919, loopChance: 0.14 },
-  { seed: 15838, loopChance: 0.16 },
-  { seed: 23757, loopChance: 0.18 },
-];
+export const SCORE = {
+  dot: 10,
+  pellet: 50,
+  ghostCombo: [200, 400, 800, 1600],
+  fruitBase: 300,
+  levelClear: 1000,
+} as const;
 
-// Paleta Backrooms (Nivel 0)
 export const COLORS = {
-  fog: 0x0b0a06,
-  wall: 0xc8b568,
-  wallDark: 0x6b5c33,
-  floor: 0x8f7e4f,
-  ceiling: 0x9a927a,
-  baseboard: 0x3a2f1c,
-  dot: 0xffbf40,
-  pellet: 0xff5a1f,
-  exitLocked: 0x552222,
+  dot: 0xffd24a,
+  pacman: 0xf5d20a,
+  exitLocked: 0x6b1c1c,
   exitOpen: 0x39ff6a,
-  flashlight: 0xfff2c8,
-  ghostRed: 0x1a0d0d,
-  ghostPale: 0xd8d2c4,
-  ghostRing: 0x6e4a2a,
-  ghostStatic: 0xb9b3a6,
-  frightened: 0x4a6cff,
-};
+  frightened: 0x3b5bff,
+} as const;
