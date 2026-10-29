@@ -22,7 +22,8 @@ export class HudController implements HudApi {
   constructor(root: HTMLElement) {
     this.root = root;
     for (const n of ["score", "high", "level", "nodes", "lives", "stamina", "battery", "bite", "staminaLabel", "batteryLabel",
-      "power", "powerFill", "message", "hint", "radar", "popups", "vignette", "flash", "exit", "fruit", "mute", "cam"]) {
+      "power", "powerFill", "message", "hint", "radar", "popups", "vignette", "flash", "exit", "fruit", "mute", "cam",
+      "crosshair", "hide"]) {
       this.el[n] = q(root, n);
     }
   }
@@ -76,7 +77,11 @@ export class HudController implements HudApi {
       e.fruit.textContent = v ? `${v} DISPONIBLE` : "";
       e.fruit.style.opacity = v ? "1" : "0";
     });
-    this.set("cam", "cam", s.camera, (v) => { e.cam.textContent = v === "fp" ? "1ª PERSONA [C]" : "3ª PERSONA [C]"; });
+    this.set("cam", "cam", `${s.camera}|${s.hidden}`, () => {
+      e.cam.textContent = s.hidden ? "ESCONDIDO" : s.camera === "fp" ? "1ª PERSONA [C]" : "3ª PERSONA [C]";
+    });
+    this.set("crosshair", "crosshair", s.crosshair ? "1" : "0", (v) => { e.crosshair.style.opacity = v; });
+    this.set("hide", "hide", s.hidden ? "1" : "0", (v) => { e.hide.style.opacity = v; });
     this.set("mute", "mute", String(s.muted), (v) => { e.mute.style.opacity = v === "true" ? "1" : "0"; });
   }
 

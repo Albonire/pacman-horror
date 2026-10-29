@@ -12,6 +12,8 @@ export type CamMode = "fp" | "tp";
 export class CameraRig {
   readonly camera: THREE.PerspectiveCamera;
   mode: CamMode = "fp";
+  /** Fuerza primera persona sin tocar `mode` (se usa dentro del escondite). */
+  forceFp = false;
   pitch = 0;
   /** Campo de vision HORIZONTAL en grados (ajuste del usuario); se convierte a vertical segun la relacion de aspecto. */
   baseFov = 90;
@@ -84,7 +86,7 @@ export class CameraRig {
     const pitch = this.pitch + sy;
     const rx = Math.cos(p.yaw), rz = -Math.sin(p.yaw);
 
-    if (this.mode === "fp") {
+    if (this.mode === "fp" || this.forceFp) {
       cam.position.set(p.x + rx * bobX, K.EYE_H + bobY, p.z + rz * bobX);
       cam.rotation.set(pitch, yaw, rollWalk + this.roll + sr);
     } else {

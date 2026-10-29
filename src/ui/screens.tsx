@@ -150,10 +150,10 @@ export function LevelSelectScreen({
 export function ControlsList() {
   const rows: [ReactNode, string][] = [
     [<><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></>, "Moverse (relativo a hacia dónde miras)"],
-    [<>Ratón</>, "Mirar. Haz clic para capturar el ratón"],
+    [<>Ratón</>, "Mirar. Haz clic en el juego para capturar el ratón"],
     [<>Flechas</>, "Adelante / atrás / lateral (en modo teclado, izquierda y derecha giran)"],
     [<><kbd>E</kbd> / <kbd>Intro</kbd></>, "Interactuar: esconderte en armarios, encender luces, salir del escondite"],
-    [<><kbd>Q</kbd></>, "Girar la vista con el teclado (en modo solo teclado también E)"],
+    [<><kbd>Q</kbd></>, "Girar la vista con el teclado (también sin capturar el ratón)"],
     [<><kbd>Shift</kbd></>, "Correr (gasta aliento; los fantasmas te oyen)"],
     [<><kbd>Espacio</kbd> / clic dcho.</>, "Ecolocalización: mapa y entidades (mantener, frena)"],
     [<><kbd>F</kbd></>, "Resplandor: linterna (gasta energía; frena al Estático)"],

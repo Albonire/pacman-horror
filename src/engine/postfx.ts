@@ -61,18 +61,23 @@ const FinalShader = {
     void main() {
       vec2 cc = vUv - 0.5;
       float r2 = dot(cc, cc);
-      vec2 uv = 0.5 + cc * (1.0 + 0.04 * r2 + uGlitch * 0.03 * r2);
+      // 0 en el centro, 1 en el borde: el warp y el desgarro se anulan al llegar al marco
+      float edge = smoothstep(0.25, 0.55, length(cc));
+      float warp = (0.04 + uGlitch * 0.03) * (1.0 - edge);
+      vec2 uv = 0.5 + cc * (1.0 + warp * r2);
       // desgarro horizontal por filas y bandas grandes
       float row = floor(uv.y * 200.0);
       float tear = (rand(vec2(row, floor(uTime * 14.0))) - 0.5) * 0.018 * uGlitch;
       float band = step(0.965, rand(vec2(floor(uv.y * 12.0), floor(uTime * 7.0)))) * uGlitch;
-      uv.x += tear + band * 0.05 * (rand(vec2(floor(uTime * 9.0), 3.0)) - 0.5);
+      uv.x += (tear + band * 0.05 * (rand(vec2(floor(uTime * 9.0), 3.0)) - 0.5)) * (1.0 - edge);
+      // nunca se muestrea fuera de la textura: evita el estirado del borde derecho
+      uv = clamp(uv, vec2(0.0015), vec2(0.9985));
       vec2 dir = normalize(cc + vec2(1e-5));
-      float ab = (0.0009 + uAberration * 0.007 + uGlitch * 0.004) * (0.3 + r2 * 5.0);
+      float ab = (0.00018 + uAberration * 0.006 + uGlitch * 0.0035) * (0.3 + r2 * 4.0) * (1.0 - edge);
       vec3 col;
-      col.r = texture2D(tDiffuse, uv + dir * ab).r;
+      col.r = texture2D(tDiffuse, clamp(uv + dir * ab, vec2(0.0015), vec2(0.9985))).r;
       col.g = texture2D(tDiffuse, uv).g;
-      col.b = texture2D(tDiffuse, uv - dir * ab).b;
+      col.b = texture2D(tDiffuse, clamp(uv - dir * ab, vec2(0.0015), vec2(0.9985))).b;
       // gradacion
       float lum = dot(col, vec3(0.299, 0.587, 0.114));
       col = mix(vec3(lum), col, uSat * (1.0 - uDesat));
@@ -92,7 +97,7 @@ const FinalShader = {
         col = mix(col, vec3(snow), uStatic * 0.55);
       }
       // vineta con pulso cardiaco
-      float vig = smoothstep(0.95, 0.2, length(cc) * (1.0 + uPulse * 0.25 + uVignette * 0.5));
+      float vig = 1.0 - smoothstep(0.2, 0.95, length(cc) * (1.0 + uPulse * 0.25 + uVignette * 0.5));
       col *= 0.38 + 0.62 * vig;
       col = mix(col, col * vec3(1.0, 0.35, 0.3), uPulse * 0.35 * (1.0 - vig));
       col = mix(col, uFlashColor, uFlash);

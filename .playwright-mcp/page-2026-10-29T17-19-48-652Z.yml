@@ -1,0 +1,29 @@
+- generic [ref=e3]:
+  - generic:
+    - generic:
+      - generic:
+        - generic: PUNTUACIÓN
+        - generic: "000000"
+        - generic: RÉCORD
+        - generic: "000000"
+      - generic:
+        - generic: NIVEL
+        - generic: NODOS 000
+      - generic:
+        - generic: VIDAS
+        - generic: 1ª PERSONA [C]
+        - generic: SILENCIADO [M]
+    - generic: PODER · ELLOS TIENEN MIEDO
+    - generic:
+      - generic: RESPLANDOR [F]
+      - generic: ALIENTO [SHIFT]
+      - generic: MORDISCO [X]
+    - generic: ESCONDIDO · E PARA SALIR
+  - generic [ref=e7]:
+    - generic [ref=e8]: ADVERTENCIA
+    - heading "CONTENIDO DE TERROR" [level=2] [ref=e9]
+    - paragraph [ref=e10]: Este juego contiene luces parpadeantes, sonidos fuertes, sustos repentinos y efectos de imagen intensos. Puede no ser adecuado para personas con fotosensibilidad o con sensibilidad al miedo.
+    - paragraph [ref=e11]: Se recomienda jugar con auriculares y un volumen moderado, en una habitación con algo de luz.
+    - generic [ref=e12]:
+      - button "ENTIENDO, CONTINUAR" [active] [ref=e13] [cursor=pointer]
+      - button "SUSTOS REDUCIDOS" [ref=e14] [cursor=pointer]

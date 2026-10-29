@@ -2,7 +2,7 @@
 // Esquema:
 //   W/S o flechas arriba/abajo: avanzar / retroceder
 //   A/D: lateral.   Flechas izq/der: lateral (modo raton) o girar (modo teclado)
-//   Q/E: girar siempre.   Raton: mirar.   Shift: correr.   Espacio o clic derecho: sonar.
+//   Q: girar siempre.   Raton: mirar.   E: interactuar.   Shift: correr.   Espacio o clic derecho: sonar.
 
 import type { ControlMode } from "./settings";
 
@@ -37,6 +37,8 @@ export class Input {
   capture = false;
   private lockFailures = 0;
   private ignoreLookUntil = 0;
+  /** Tras un rechazo con movimiento crudo se reintenta sin opciones en el siguiente clic. */
+  private plainLock = false;
 
   constructor(el: HTMLElement, cb: InputCallbacks) {
     this.el = el;
@@ -76,17 +78,16 @@ export class Input {
   requestLock(): void {
     if (this.mode === "keyboard" || this.locked) return;
     const el = this.el as HTMLElement & { requestPointerLock: (o?: { unadjustedMovement?: boolean }) => Promise<void> | void };
-    const swallow = (r: unknown): void => { if (r && typeof (r as Promise<void>).catch === "function") (r as Promise<void>).catch(() => { /* sin gesto del usuario: se pedira de nuevo con un clic */ }); };
     try {
-      const r = el.requestPointerLock({ unadjustedMovement: true });
+      // movimiento crudo si el navegador lo soporta; si lo rechaza se reintenta sin opciones
+      // en el proximo clic, que conserva el gesto del usuario.
+      const r = this.plainLock ? el.requestPointerLock() : el.requestPointerLock({ unadjustedMovement: true });
       if (r && typeof (r as Promise<void>).catch === "function") {
-        (r as Promise<void>).catch(() => {
-          // sin movimiento crudo: reintento normal
-          try { swallow(el.requestPointerLock()); } catch { /* noop */ }
-        });
+        (r as Promise<void>).catch(() => { this.plainLock = true; });
       }
     } catch {
-      try { swallow(el.requestPointerLock()); } catch { /* noop */ }
+      this.plainLock = true;
+      try { el.requestPointerLock(); } catch { /* noop */ }
     }
   }
 
@@ -109,7 +110,8 @@ export class Input {
   private down(...codes: string[]): boolean { return codes.some((c) => this.keys.has(c)); }
 
   axes(): { forward: number; strafe: number; turn: number; lookV: number } {
-    const kbTurn = this.mode === "keyboard";
+    // sin pointer lock se puede girar con el teclado aunque el ajuste sea "raton"
+    const kbTurn = this.mode === "keyboard" || (this.mode === "mouse" && !this.locked);
     let forward = 0, strafe = 0, turn = 0, lookV = 0;
     if (this.down("KeyW", "ArrowUp")) forward += 1;
     if (this.down("KeyS", "ArrowDown")) forward -= 1;
@@ -123,9 +125,8 @@ export class Input {
       if (this.down("ArrowLeft")) strafe -= 1;
     }
     if (this.down("KeyQ")) turn += 1;
-    if (kbTurn && this.down("KeyE")) turn -= 1; // en modo raton E interactua
     if (kbTurn) {
-      // en modo teclado: R/F inclinan la vista
+      // sin raton: R/F inclinan la vista
       if (this.down("KeyR")) lookV += 1;
       if (this.down("KeyV")) lookV -= 1;
     }
@@ -154,7 +155,7 @@ export class Input {
       case "KeyC": this.cb.onToggleCamera(); break;
       case "KeyM": this.cb.onToggleMute(); break;
       case "KeyX": this.cb.onBite(); break;
-      case "KeyE": if (this.mode === "mouse") this.cb.onInteract(); break;
+      case "KeyE": this.cb.onInteract(); break;
       case "Enter": this.cb.onInteract(); break;
     }
   };

@@ -118,6 +118,57 @@ try {
   await clickText("LISTO");
   check("se puede reanudar", await clickText("REANUDAR") && await waitPhase("playing", 10000));
 
+  // escondites e interruptores con E (sin pointer lock, como en modo teclado)
+  const hidePrep = await page.evaluate(() => {
+    const g = window.__umbral, s = g.sim;
+    // el fallo original: en modo solo teclado E giraba en vez de interactuar
+    g.applySettings({ ...g.settings, controlMode: "keyboard" }, false);
+    for (const gh of s.ghosts) { gh.mode = "dormant"; gh.wakeTimer = 9999; }
+    s.zoneLit.fill(5);
+    const h = s.hideSpots[0];
+    s.player.x = h.x; s.player.z = h.z;
+    s.player.vx = 0; s.player.vz = 0;
+    s.hideCd = 0;
+    return { hint: s.interactHint, spots: s.hideSpots.length };
+  });
+  check("junto al armario la pista es esconderse", hidePrep.spots > 0 && hidePrep.hint === "hide", hidePrep.hint ?? "sin pista");
+  await page.keyboard.press("KeyE");
+  check("E se esconde en el armario en modo teclado", await page.waitForFunction(() => window.__umbral.sim.hidden !== null, { timeout: 10000 }).then(() => true, () => false));
+
+  await page.evaluate(() => { window.__umbral.rig.mode = "tp"; });
+  check("dentro del escondite la camara se fuerza en primera persona", await page.waitForFunction(() => window.__umbral.rig.forceFp === true, { timeout: 10000 }).then(() => true, () => false));
+  await page.keyboard.press("KeyC");
+  check("C no cambia la camara dentro del escondite", await page.evaluate(() => window.__umbral.rig.mode === "tp"));
+  const hideHud = await page.evaluate(() => {
+    const el = document.querySelector('[data-hud="hide"]');
+    return el ? el.style.opacity : "-";
+  });
+  check("el HUD muestra la vision por las ranuras", hideHud === "1", hideHud);
+
+  await page.keyboard.press("KeyE");
+  check("E vuelve a salir del escondite", await page.waitForFunction(() => window.__umbral.sim.hidden === null, { timeout: 10000 }).then(() => true, () => false));
+
+  const swPrep = await page.evaluate(() => {
+    const s = window.__umbral.sim;
+    const sw = s.switches[0];
+    s.zoneLit[sw.zone] = 0;
+    s.player.x = sw.x; s.player.z = sw.z;
+    s.player.vx = 0; s.player.vz = 0;
+    s.hideCd = 0;
+    // aparta los armarios para que no roben la interaccion
+    window.__savedHideSpots = s.hideSpots;
+    s.hideSpots = [];
+    return { zone: sw.zone, hint: s.interactHint };
+  });
+  check("junto al interruptor la pista es encender la luz", swPrep.hint === "switch", swPrep.hint ?? "sin pista");
+  await page.keyboard.press("KeyE");
+  check("E enciende la luz de la zona", await page.waitForFunction((z) => window.__umbral.sim.zoneLit[z] > 5, { timeout: 10000 }, swPrep.zone).then(() => true, () => false));
+  await page.evaluate(() => {
+    const s = window.__umbral.sim;
+    s.hideSpots = window.__savedHideSpots;
+    delete window.__savedHideSpots;
+  });
+
   // muerte: un fantasma despierto encima del jugador
   const died = await page.evaluate(() => {
     window.__scareSeen = false;

@@ -45,6 +45,10 @@ export interface HudState {
   powerFrac: number; // 0..1, 0 = sin poder
   powerLow: boolean;
   camera: "fp" | "tp";
+  /** El jugador esta dentro de un escondite (primera persona forzada). */
+  hidden: boolean;
+  /** Retícula de mira: solo en primera persona y fuera del escondite. */
+  crosshair: boolean;
   sonar: boolean;
   exitOpen: boolean;
   fruitName: string | null;

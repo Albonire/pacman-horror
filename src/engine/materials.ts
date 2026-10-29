@@ -9,6 +9,8 @@ interface MacroOpts {
   scale?: number; // frecuencia espacial del ruido macro
   strength?: number; // 0..1
   vertical?: boolean; // incluye la altura (paredes)
+  /** Detalle de alta frecuencia (0..1) que se desvanece con la distancia a la camara. */
+  detail?: number;
 }
 
 /** Anade variacion de color de baja frecuencia en espacio mundo para disimular el tileado. */
@@ -16,6 +18,16 @@ export function addMacroVariation(mat: THREE.MeshStandardMaterial, opts: MacroOp
   const scale = opts.scale ?? 0.16;
   const strength = opts.strength ?? 0.35;
   const vertical = opts.vertical ? "1" : "0";
+  const detail = opts.detail ?? 0;
+  // el detalle fino solo se ve de cerca: a distancia produce aliasing con el mipmap
+  const detailBlock = detail > 0
+    ? `{
+        float mdist = distance(vMacroPos, cameraPosition);
+        float nearK = 1.0 - smoothstep(3.0, 12.0, mdist);
+        float dv = mNoise(mp * 6.3 + 3.0) * 0.6 + mNoise(mp * 14.7 + 17.0) * 0.4;
+        diffuseColor.rgb *= 1.0 + (dv - 0.5) * ${(detail * 2).toFixed(3)} * nearK;
+      }`
+    : "";
   mat.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", `#include <common>\nvarying vec3 vMacroPos;`)
@@ -47,10 +59,11 @@ export function addMacroVariation(mat: THREE.MeshStandardMaterial, opts: MacroOp
           vec2 mp = ${vertical} == 1 ? vec2(vMacroPos.x + vMacroPos.z, vMacroPos.y * 0.6) : vMacroPos.xz;
           float mv = mNoise(mp * ${scale.toFixed(3)}) * 0.6 + mNoise(mp * ${(scale * 4.1).toFixed(3)} + 11.0) * 0.4;
           diffuseColor.rgb *= 1.0 - ${strength.toFixed(3)} + ${strength.toFixed(3)} * 2.0 * mv;
+          ${detailBlock}
         }`,
       );
   };
-  mat.customProgramCacheKey = () => `macro_${scale}_${strength}_${vertical}`;
+  mat.customProgramCacheKey = () => `macro_${scale}_${strength}_${vertical}_${detail}`;
 }
 
 export function surfaceMaterial(

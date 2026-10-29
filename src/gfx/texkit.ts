@@ -21,7 +21,7 @@ export function toTexture(c: HTMLCanvasElement, srgb: boolean, repeat = true): T
   const t = new THREE.CanvasTexture(c);
   if (repeat) { t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.RepeatWrapping; }
   t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-  t.anisotropy = 8;
+  t.anisotropy = 16;
   t.generateMipmaps = true;
   t.minFilter = THREE.LinearMipmapLinearFilter;
   return t;

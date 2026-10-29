@@ -140,6 +140,7 @@ export class Game {
   private dotStreakT = 0;
   private lowBatteryT = 0;
   private lockHintT = 0;
+  private lockErrorShownAt = -10;
   private lastWrapT = -10;
   private levelTime = 0;
   private attractX = 0;
@@ -367,6 +368,7 @@ export class Game {
     this.rig.baseFov = s.fov;
     this.rig.headBob = s.headBob;
     this.input.mode = s.controlMode;
+    if (s.controlMode === "keyboard") this.input.releaseLock();
     this.audio.setVolume(s.volume);
     this.audio.setMuted(s.muted);
     this.scare.level = s.scares;
@@ -535,6 +537,10 @@ export class Game {
 
   private toggleCamera(): void {
     if (this.phase !== "playing") return;
+    if (this.sim?.hidden) {
+      this.hud.message("Dentro del escondite no puedes cambiar de cámara", 1.8, "info");
+      return;
+    }
     this.rig.mode = this.rig.mode === "fp" ? "tp" : "fp";
     this.audio.playUiClick();
   }
@@ -560,12 +566,10 @@ export class Game {
   }
 
   private onLockError(): void {
-    if (this.input.failedLocks >= 2 && this.settings.controlMode === "mouse") {
-      // sin pointer lock: modo solo teclado
-      const s = { ...this.settings, controlMode: "keyboard" as const };
-      this.applySettings(s);
-      this.hud.message("No se pudo capturar el ratón. Modo teclado: gira con las flechas o Q/E", 5, "warn");
-    }
+    // no se cambia el ajuste del jugador: solo se avisa y se reintenta con el proximo clic
+    if (this.time - this.lockErrorShownAt < 3) return;
+    this.lockErrorShownAt = this.time;
+    this.hud.message("No se pudo capturar el ratón. Haz clic para reintentar o usa Solo teclado en Ajustes.", 5, "warn");
   }
 
   // =====================================================================================
@@ -670,12 +674,14 @@ export class Game {
     this.yawVel += ((p.yaw - yaw0) / Math.max(dt, 1e-3) - this.yawVel) * Math.min(1, dt * 12);
     this.pitchVel += ((this.rig.pitch - pitch0) / Math.max(dt, 1e-3) - this.pitchVel) * Math.min(1, dt * 12);
 
+    const ih = sim.interactHint;
+    const interactHint = ih === "hide" ? "E: esconderte" : ih === "switch" ? "E: encender la luz (hace ruido)" : ih === "leave" ? "E: salir del escondite" : null;
     if (this.input.needsLock && !this.input.locked) {
       this.lockHintT += dt;
-      if (this.lockHintT > 0.4) this.hud.showHint("Haz clic en la pantalla para capturar el ratón");
+      if (interactHint) this.hud.showHint(interactHint);
+      else if (this.lockHintT > 0.4) this.hud.showHint("Clic para capturar el ratón · Q o flechas para girar");
     } else {
-      const ih = sim.interactHint;
-      this.hud.showHint(ih === "hide" ? "E: esconderte" : ih === "switch" ? "E: encender la luz (hace ruido)" : ih === "leave" ? "E: salir del escondite" : null);
+      this.hud.showHint(interactHint);
     }
 
     if (sim.hidden) {
@@ -1064,6 +1070,7 @@ export class Game {
     const sim = this.sim!;
     const p = sim.player;
     const exertion = clamp(1 - p.stamina / K.STAMINA_MAX, 0, 1) * (p.running || p.exhausted ? 1 : 0.5);
+    this.rig.forceFp = !!sim.hidden;
     if (this.phase === "playing" || this.phase === "paused" || this.phase === "levelclear") {
       this.rig.update(dt, p, sim.maze, { exertion, tension: this.tension, frozen: false });
     } else {
@@ -1072,7 +1079,8 @@ export class Game {
     const cam = this.rig.camera;
 
     // Pac-Man 3a persona / mandibulas 1a persona
-    const tp = this.rig.mode === "tp" && this.phase !== "menu" && this.phase !== "briefing" && !this.rig.override;
+    // dentro del escondite siempre se ve en primera persona: la camara en tercera quedaria dentro del mueble
+    const tp = this.rig.mode === "tp" && this.phase !== "menu" && this.phase !== "briefing" && !this.rig.override && !sim.hidden;
     this.pacman.group.visible = tp;
     if (tp) {
       this.pacman.group.position.set(p.x, 0, p.z);
@@ -1082,7 +1090,7 @@ export class Game {
         fear: this.tension, time: this.time, exhausted: p.exhausted,
       });
     }
-    const showJaws = !tp && (this.phase === "playing" || this.phase === "paused" || this.phase === "levelclear");
+    const showJaws = !tp && !sim.hidden && (this.phase === "playing" || this.phase === "paused" || this.phase === "levelclear");
     this.jaws.scene.visible = showJaws;
     if (showJaws) {
       this.jaws.update(dt, {
@@ -1156,6 +1164,8 @@ export class Game {
       powerFrac: sim.powered ? sim.frightTimer / Math.max(0.01, sim.frightTotal) : 0,
       powerLow: sim.powered && sim.frightTimer < 2.2,
       camera: this.rig.mode,
+      hidden: !!sim.hidden,
+      crosshair: this.rig.mode === "fp" && !sim.hidden,
       sonar: p.sonarOpen,
       exitOpen: sim.exitUnlocked,
       fruitName: sim.fruit.active ? this.level.fruitName : null,
