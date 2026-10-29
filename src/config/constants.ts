@@ -14,10 +14,10 @@ export const PLAYER_DECEL = 34; // u/s^2
 export const SONAR_SLOW = 0.5; // multiplicador de velocidad con el sonar abierto
 
 export const STAMINA_MAX = 100;
-export const STAMINA_DRAIN = 24; // por segundo corriendo
-export const STAMINA_RECOVER = 15; // por segundo sin correr
+export const STAMINA_DRAIN = 20; // por segundo corriendo
+export const STAMINA_RECOVER = 16; // por segundo sin correr
 export const STAMINA_EXHAUST_BELOW = 0; // al llegar a 0 queda agotado
-export const STAMINA_RESUME_AT = 28; // se puede volver a correr al recuperar esto
+export const STAMINA_RESUME_AT = 25; // se puede volver a correr al recuperar esto
 
 export const BATTERY_MAX = 100;
 export const BATTERY_DRAIN = 2.3; // por segundo con la luz encendida
@@ -27,7 +27,7 @@ export const BATTERY_STARE_DRAIN = 5; // extra mientras el Estatico esta congela
 // ---------------- Fantasmas ----------------
 export const GHOST_RADIUS = 0.5;
 export const GHOST_CATCH_DIST = 0.82; // distancia centro a centro que cuenta como atrapado
-export const GHOST_SPEED_BASE = 1.5; // celdas/s
+export const GHOST_SPEED_BASE = 1.25; // celdas/s
 export const GHOST_FRIGHT_FACTOR = 0.55;
 export const GHOST_EATEN_SPEED = 3.4; // celdas/s
 export const GHOST_TUNNEL_FACTOR = 0.7;
@@ -38,7 +38,7 @@ export const DOT_EAT_RANGE = 0.78;
 export const PELLET_EAT_RANGE = 0.95;
 export const FRUIT_EAT_RANGE = 0.95;
 export const EXTRA_LIFE_SCORE = 10000;
-export const RESPAWN_GRACE = 2.6; // segundos sin fantasmas activos tras reaparecer
+export const RESPAWN_GRACE = 5; // segundos sin fantasmas activos tras reaparecer
 export const INVULN_TIME = 2.0;
 export const SONAR_PING_INTERVAL = 2.0;
 

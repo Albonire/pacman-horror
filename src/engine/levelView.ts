@@ -334,8 +334,12 @@ export class LevelView {
       lv *= u.lightsMul;
       if (u.powered) lv = lv * 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(t * 9 + f.phase));
       f.level = lv;
-      if (mesh && (i & 3) === (Math.floor(t * 30) & 3)) {
-        mesh.setColorAt(i, this.fixtureCol.copy(f.color).multiplyScalar(f.dead ? 0.05 : 0.05 + lv * 2.2));
+      if (mesh) {
+        // la luminaria se atenua al acercarse a la camara: evita el disco blanco que satura el bloom
+        const dx = f.x - u.playerX, dz = f.z - u.playerZ;
+        const near = Math.min(1, Math.max(0, (Math.sqrt(dx * dx + dz * dz) - 1.0) / 3.6));
+        const nearGain = 0.28 + 0.72 * near * near * (3 - 2 * near);
+        mesh.setColorAt(i, this.fixtureCol.copy(f.color).multiplyScalar(f.dead ? 0.05 : 0.05 + lv * 2.2 * nearGain));
       }
     }
     if (mesh && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
