@@ -16,6 +16,10 @@ describe("ajustes y progreso", () => {
     expect(s.scares).toBe("full");
     expect(s.quality).toBe("high");
     expect(s.controlMode).toBe("mouse");
+
+    expect(sanitizeSettings({ ...DEFAULT_SETTINGS, scares: "nofullscreen" }).scares).toBe("nofullscreen");
+    expect(sanitizeSettings({ ...DEFAULT_SETTINGS, scares: "reduced" }).scares).toBe("reduced");
+    expect(sanitizeSettings({ ...DEFAULT_SETTINGS, scares: "off" }).scares).toBe("off");
   });
 
   it("el progreso corrupto no desbloquea niveles inexistentes ni propaga basura", () => {
@@ -31,5 +35,30 @@ describe("ajustes y progreso", () => {
   it("un progreso valido se conserva", () => {
     const ok: Progress = { highScore: 4200, unlocked: 3, bestScoreByLevel: { "0": 900, "2": 1500 }, warningAccepted: true, completedRuns: 1 };
     expect(sanitizeProgress(ok, 6)).toEqual(ok);
+  });
+
+  it("migra controlMode keyboard guardado por error antiguo a mouse", () => {
+    const store = new Map<string, string>();
+    const fakeLocalStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => store.set(k, String(v)),
+      removeItem: (k: string) => store.delete(k),
+      clear: () => store.clear(),
+    };
+    const prevWindow = (globalThis as { window?: unknown }).window;
+    (globalThis as { window?: unknown }).window = { localStorage: fakeLocalStorage };
+    try {
+      fakeLocalStorage.setItem("umbral.settings.v1", JSON.stringify({ controlMode: "keyboard" }));
+      const loaded = loadSettings();
+      expect(loaded.controlMode).toBe("mouse");
+      const raw = JSON.parse(fakeLocalStorage.getItem("umbral.settings.v1") || "{}");
+      expect(raw.controlMode).toBe("mouse");
+    } finally {
+      if (prevWindow === undefined) {
+        delete (globalThis as { window?: unknown }).window;
+      } else {
+        (globalThis as { window?: unknown }).window = prevWindow;
+      }
+    }
   });
 });

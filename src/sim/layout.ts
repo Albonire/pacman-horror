@@ -220,17 +220,29 @@ function build(spec: LayoutSpec, seed: number): LevelLayout | null {
     }
   }
   const switches: { cell: Cell; zone: number; wall: Cell }[] = [];
-  const wallOf = (c: Cell): Cell | null => {
+  const hasWall = (c: Cell): boolean => DIRS.some(([dx, dy]) => !g[c[1] + dy]?.[c[0] + dx]);
+  const pickWall = (c: Cell): Cell => {
     const w = DIRS.filter(([dx, dy]) => !g[c[1] + dy]?.[c[0] + dx]);
-    return w.length ? w[Math.floor(rng() * w.length)] : null;
+    return w[Math.floor(rng() * w.length)];
   };
   zones.forEach((z, zi) => {
     // interruptor en el borde de la zona
-    const ring = freeCells().filter((c) => { const d = eu(c, z.cell); return d >= z.r - 0.6 && d <= z.r + 1.8 && wallOf(c); });
-    const pick = ring.length ? ring[Math.floor(rng() * ring.length)] : null;
+    const ring = freeCells().filter((c) => { const d = eu(c, z.cell); return d >= z.r - 0.6 && d <= z.r + 1.8 && hasWall(c); });
+    let pick = ring.length ? ring[Math.floor(rng() * ring.length)] : null;
+    if (!pick) {
+      // ampliacion del radio para garantizar que cada zona oscura tenga siempre una caja accesible
+      const fallback = freeCells().filter((c) => { const d = eu(c, z.cell); return d <= z.r + 3.2 && hasWall(c); })
+        .sort((a, b) => eu(a, z.cell) - eu(b, z.cell));
+      pick = fallback.length ? fallback[0] : null;
+    }
+    if (!pick) {
+      // ultimo recurso: cualquier celda transitable libre con muro adyacente mas cercana a la zona
+      const anyNear = freeCells().filter((c) => hasWall(c)).sort((a, b) => eu(a, z.cell) - eu(b, z.cell));
+      pick = anyNear.length ? anyNear[0] : null;
+    }
     if (!pick) return;
     take(pick);
-    switches.push({ cell: pick, zone: zi, wall: wallOf(pick)! });
+    switches.push({ cell: pick, zone: zi, wall: pickWall(pick) });
   });
   const batteries: Cell[] = [];
   const batteryCount = Math.max(3, Math.round(totalDotsEstimate(open2.length) / 80));

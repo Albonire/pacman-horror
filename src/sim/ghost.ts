@@ -1,8 +1,8 @@
 // Estado de un fantasma + IA de seleccion de direccion en la rejilla (pura, testeable).
 
-import { GHOST_HEAR_RADIUS } from "../config/constants";
 import { DIRS, UNREACHABLE, type Cell, type Maze } from "./maze";
 import type { Rng } from "./rng";
+import type { Trail } from "./trail";
 
 export type GhostKind = 0 | 1 | 2 | 3; // 0 Blinky, 1 Pinky, 2 Inky, 3 Clyde
 export type GhostMode = "dormant" | "scatter" | "chase" | "frightened" | "eaten";
@@ -45,6 +45,14 @@ export class GhostSim {
   /** Impulso de velocidad tras dejar de ser observado (El Estatico). */
   dash = 0;
 
+  // memoria de caceria
+  /** Ultima celda donde vio u oyo al jugador (null si ya lo olvido). */
+  lastSeen: Cell | null = null;
+  /** Segundos desde el ultimo avistamiento. */
+  lostT = 0;
+  /** True si el ultimo contacto fue visual (sin error de giro y con embestida segura). */
+  sawPlayer = false;
+
   private field: Int16Array;
 
   constructor(kind: GhostKind, maze: Maze, spawn: Cell, corner: Cell) {
@@ -77,6 +85,9 @@ export class GhostSim {
     this.dash = 0;
     this.offX = 0;
     this.offZ = 0;
+    this.lastSeen = null;
+    this.lostT = 0;
+    this.sawPlayer = false;
     // mira hacia un pasillo abierto
     let best: Cell = [0, 1];
     for (const d of DIRS) if (maze.isWalkable(this.cx + d[0], this.cy + d[1])) { best = d; break; }
@@ -154,35 +165,28 @@ export class GhostSim {
 export interface AIContext {
   maze: Maze;
   playerCell: Cell;
-  playerHeading: Cell; // direccion cardinal en la que mira/avanza el jugador
+  playerHeading: Cell; // direccion cardinal en la que avanza el jugador
   playerNoisy: boolean; // corriendo o con el sonar abierto
   ghosts: readonly GhostSim[];
   rng: Rng;
   mistake: number; // prob. de giro aleatorio
   hearRadius?: number;
+  // percepcion y memoria
+  time: number;
+  playerX: number;
+  playerZ: number;
+  /** Direccion cardinal de la mirada (viewYaw), no la del movimiento. */
+  playerView: Cell;
+  playerRunning: boolean;
+  trail: Trail;
+  trailDelay: number; // segundos de retraso del rastro que sigue El Acechador
+  memory: number; // segundos que recuerdan la ultima posicion
+  searchTime: number; // segundos buscando alrededor de la ultima posicion
+  viewCells: number;
+  fovCos: number; // coseno del semiangulo de vision
+  hearCells: number;
 }
 
-/** Objetivo de persecucion de cada fantasma (versiones del Pac-Man clasico adaptadas). */
-export function chaseTarget(g: GhostSim, ctx: AIContext): Cell {
-  const { maze, playerCell: pc, playerHeading: ph } = ctx;
-  switch (g.kind) {
-    case 0: // Acechador: directo
-      return pc;
-    case 1: { // Emboscadora: 4 celdas por delante; si esta cerca, directo
-      if (maze.distance(g.cell, pc) <= 3) return pc;
-      return maze.nearestWalkable([pc[0] + ph[0] * 4, pc[1] + ph[1] * 4]);
-    }
-    case 2: { // Resonador: flanqueo con el Acechador, o te oye si haces ruido
-      const hear = ctx.hearRadius ?? GHOST_HEAR_RADIUS;
-      if (ctx.playerNoisy && maze.distance(g.cell, pc) <= hear) return pc;
-      const blinky = ctx.ghosts.find((o) => o.kind === 0 && o.active) ?? g;
-      const px = pc[0] + ph[0] * 2, py = pc[1] + ph[1] * 2;
-      return maze.nearestWalkable([blinky.cx + 2 * (px - blinky.cx), blinky.cy + 2 * (py - blinky.cy)]);
-    }
-    default: // Estatico: timido
-      return maze.distance(g.cell, pc) > 8 ? pc : g.corner;
-  }
-}
 
 function walkableDirs(g: GhostSim, maze: Maze): Cell[] {
   const out: Cell[] = [];
@@ -208,18 +212,22 @@ function pickLegal(g: GhostSim, maze: Maze): { options: Cell[]; forced: Cell | n
 }
 
 /** Direccion a seguir hacia un objetivo: minimiza la distancia BFS sin dar media vuelta. */
-export function chooseToward(g: GhostSim, ctx: AIContext, target: Cell): Cell | null {
+export function chooseToward(g: GhostSim, ctx: AIContext, target: Cell, mistake = ctx.mistake): Cell | null {
   const { maze, rng } = ctx;
   const { options, forced } = pickLegal(g, maze);
   if (forced) return forced;
   if (!options.length) return null;
   if (options.length === 1) return options[0];
-  if (ctx.mistake > 0 && rng() < ctx.mistake) return options[Math.floor(rng() * options.length)];
+  if (mistake > 0 && rng() < mistake) return options[Math.floor(rng() * options.length)];
   const field = g.fieldTo(maze, target);
   let best = options[0], bd = Infinity;
   for (const d of options) {
     const nx = maze.wrapX(g.cx + d[0], g.cy + d[1]), ny = g.cy + d[1];
-    const dist = field[ny * maze.W + nx];
+    let dist = field[ny * maze.W + nx];
+    // Cohesion estrategica: penalizacion leve en bifurcaciones si otro fantasma activo ya esta en esa celda
+    // para evitar que caminen en fila india y favorecer movimientos envolventes
+    const occupied = ctx.ghosts.some((o) => o !== g && o.active && o.cx === nx && o.cy === ny);
+    if (occupied) dist += 1.5;
     if (dist < bd) { bd = dist; best = d; }
   }
   if (bd >= UNREACHABLE) return options[Math.floor(rng() * options.length)];

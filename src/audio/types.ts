@@ -1,8 +1,9 @@
 import type { ThemeId } from "../config/campaign";
+import type { FaceKind } from "../gfx/faces";
 import type { GhostMode } from "../sim/ghost";
 
 export interface AudioGhost {
-  kind: 0 | 1 | 2 | 3;
+  kind: FaceKind;
   x: number;
   y: number;
   z: number;
@@ -31,6 +32,12 @@ export interface AudioFrame {
   dread: number;
   /** 0..1: cuan dentro de una zona oscura esta el jugador. */
   darkness: number;
+  /** True si el jugador esta escondido en un armario. */
+  hidden?: boolean;
+  /** True si un fantasma peligroso esta cerca del escondite. */
+  hiddenNearGhost?: boolean;
+  /** True durante la secuencia de muerte: se corta la respiracion para dejar silencio real. */
+  dead?: boolean;
 }
 
 /** Superficie de audio que usa el motor. Implementada por HorrorAudio (Web Audio) y NullAudio (silencio). */
@@ -69,8 +76,8 @@ export interface GameAudio {
   playPing(): void;
   playWaveChange(chase: boolean): void;
   playWrap(): void;
-  /** Susto de muerte: grito unico del fantasma. */
-  playDeathScream(kind: number): void;
+  /** Susto de muerte: grito unico del fantasma. `gain` lo atenua segun el nivel de sustos. */
+  playDeathScream(kind: FaceKind, gain?: number): void;
   playGameOver(): void;
   playUiClick(): void;
   /** Sustos ambientales. */
@@ -120,7 +127,7 @@ export class NullAudio implements GameAudio {
   playPing(): void {}
   playWaveChange(): void {}
   playWrap(): void {}
-  playDeathScream(): void {}
+  playDeathScream(_kind?: FaceKind, _gain?: number): void {}
   playGameOver(): void {}
   playUiClick(): void {}
   playStinger(): void {}

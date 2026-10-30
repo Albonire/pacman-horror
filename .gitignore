@@ -4,3 +4,4 @@ dist
 .DS_Store
 scripts/*.png
 .vite
+.playwright-mcp

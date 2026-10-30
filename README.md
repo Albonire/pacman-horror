@@ -2,7 +2,7 @@
 
 Terror en primera persona. Eres Pac-Man, atrapado en un laberinto que no debería existir: devora todos los nodos para abrir la salida, pero los fantasmas ya saben dónde estás.
 
-Todo es procedural: texturas, modelos, música, voces, respiraciones y sustos se generan en el navegador (three.js + Web Audio). No hay ficheros de audio ni de imágenes. La compilación es un único `index.html`.
+Todo es procedural y autocontenido: texturas, modelos, música, respiraciones y ambientación se generan en el navegador (three.js + Web Audio), con audio híbrido que integra un sintetizador procedural y una muestra vocal masterizada de ElevenLabs incrustada en Base64 para mantener cero dependencias de red. La compilación es un único `index.html`.
 
 > Aviso: contiene luces parpadeantes, sonidos fuertes, sustos repentinos y efectos de imagen intensos. Al abrir el juego se ofrece una advertencia y la opción "Sustos reducidos"; en Ajustes se puede elegir entre sustos completos, reducidos o sin pantalla completa.
 
@@ -14,6 +14,7 @@ Todo es procedural: texturas, modelos, música, voces, respiraciones y sustos se
 | Mirar | Ratón (clic para capturarlo) |
 | Interactuar (esconderse, palanca, salir) | `E` o `Intro` |
 | Girar con teclado | `Q` (en modo "solo teclado" también `E`, `←` `→`, y `R` `V` para inclinar) |
+| Mirar por encima del hombro (sin desviar el paso) | `Z` |
 | Correr | `Shift` (gasta aliento; los fantasmas oyen los pasos rápidos) |
 | Ecolocalización (mapa y entidades) | `Espacio` o clic derecho, mantener; frena el paso |
 | Linterna "Resplandor" | `F` (gasta batería; congela al Estático) |
@@ -46,7 +47,7 @@ Si el equipo no sostiene unos 26 fps durante unos segundos de partida, el juego 
 
 | Fantasma | Comportamiento |
 | --- | --- |
-| El Acechador | Persigue directamente; se acelera cuando quedan pocos nodos |
+| El Acechador | Persigue siguiendo el rastro del jugador desde atrás; se acelera cuando quedan pocos nodos y acecha en silencio |
 | La Emboscada | Apunta unas celdas por delante de ti |
 | El Resonador | Flanquea usando la posición del Acechador y oye tus pasos rápidos |
 | El Estático | Se congela mientras lo miras con la linterna encendida; al apartar la vista se lanza |

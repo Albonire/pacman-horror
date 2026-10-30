@@ -154,6 +154,7 @@ export function ControlsList() {
     [<>Flechas</>, "Adelante / atrás / lateral (en modo teclado, izquierda y derecha giran)"],
     [<><kbd>E</kbd> / <kbd>Intro</kbd></>, "Interactuar: esconderte en armarios, encender luces, salir del escondite"],
     [<><kbd>Q</kbd></>, "Girar la vista con el teclado (también sin capturar el ratón)"],
+    [<><kbd>Z</kbd></>, "Mirar por encima del hombro (sin desviar el paso)"],
     [<><kbd>Shift</kbd></>, "Correr (gasta aliento; los fantasmas te oyen)"],
     [<><kbd>Espacio</kbd> / clic dcho.</>, "Ecolocalización: mapa y entidades (mantener, frena)"],
     [<><kbd>F</kbd></>, "Resplandor: linterna (gasta energía; frena al Estático)"],

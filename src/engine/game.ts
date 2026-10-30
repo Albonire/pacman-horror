@@ -144,6 +144,7 @@ export class Game {
   private lastWrapT = -10;
   private levelTime = 0;
   private attractX = 0;
+  private dustTimer = 0;
 
   constructor(init: GameInit) {
     this.container = init.container;
@@ -566,10 +567,11 @@ export class Game {
   }
 
   private onLockError(): void {
-    // no se cambia el ajuste del jugador: solo se avisa y se reintenta con el proximo clic
-    if (this.time - this.lockErrorShownAt < 3) return;
+    // Si el entorno (p. ej. iframe sin permisos) rechaza el pointer lock, no se bloquea al jugador:
+    // el raton sigue funcionando en modo relativo. Solo se avisa de forma no intrusiva tras fallos repetidos.
+    if (this.input.failedLocks < 2 || this.time - this.lockErrorShownAt < 6) return;
     this.lockErrorShownAt = this.time;
-    this.hud.message("No se pudo capturar el ratón. Haz clic para reintentar o usa Solo teclado en Ajustes.", 5, "warn");
+    this.hud.message("Control con ratón activo en ventana. También puedes usar Q o flechas para girar.", 4, "info");
   }
 
   // =====================================================================================
@@ -679,7 +681,7 @@ export class Game {
     if (this.input.needsLock && !this.input.locked) {
       this.lockHintT += dt;
       if (interactHint) this.hud.showHint(interactHint);
-      else if (this.lockHintT > 0.4) this.hud.showHint("Clic para capturar el ratón · Q o flechas para girar");
+      else if (this.input.failedLocks === 0 && this.lockHintT > 0.4 && this.lockHintT < 5.0) this.hud.showHint("Clic para capturar el ratón · Q o flechas para girar");
     } else {
       this.hud.showHint(interactHint);
     }
@@ -692,10 +694,31 @@ export class Game {
       p.yaw = base + clamp(rel, -0.95, 0.95);
       this.rig.pitch = clamp(this.rig.pitch, -0.45, 0.45);
     }
-    sim.update(dt, { forward: axes.forward, strafe: axes.strafe, sprint: this.input.sprint, sonar: this.input.sonar, bite: this.biteReq, interact: this.interactReq });
+    sim.update(dt, { forward: axes.forward, strafe: axes.strafe, sprint: this.input.sprint, sonar: this.input.sonar, bite: this.biteReq, interact: this.interactReq, lookBack: this.input.lookBack });
     this.biteReq = false; this.interactReq = false;
     this.levelTime += dt;
     if (this.run) this.run.totalTime += dt;
+
+    // motas de polvo flotando en el haz de la linterna
+    if (p.lightOn && this.rig.mode === "fp" && !sim.hidden) {
+      this.dustTimer += dt;
+      if (this.dustTimer > 0.055) {
+        this.dustTimer = 0;
+        const fwd = this.rig.forward;
+        const len = Math.hypot(fwd.z, fwd.x) || 1;
+        const rx = fwd.z / len, rz = -fwd.x / len;
+        const dist = 1.2 + Math.random() * 3.5;
+        const spreadX = (Math.random() - 0.5) * 0.8 * (dist / 3);
+        const spreadY = (Math.random() - 0.5) * 0.6 * (dist / 3);
+        const px = this.rig.position.x + fwd.x * dist + rx * spreadX;
+        const py = clamp(this.rig.position.y + fwd.y * dist + spreadY, 0.15, 2.65);
+        const pz = this.rig.position.z + fwd.z * dist + rz * spreadX;
+        const vx = (Math.random() - 0.5) * 0.05 + fwd.x * 0.03;
+        const vy = (Math.random() - 0.5) * 0.04 + 0.015;
+        const vz = (Math.random() - 0.5) * 0.05 + fwd.z * 0.03;
+        this.particles.emit(px, py, pz, vx, vy, vz, 2.8 + Math.random() * 2.0, 0.035 + Math.random() * 0.035, 0xffebcc, 0, 0.96);
+      }
+    }
 
     this.handleEvents(sim.drainEvents());
     this.director?.update(dt);
@@ -1104,7 +1127,7 @@ export class Game {
     const forward = this.rig.forward;
     const origin = tp ? new THREE.Vector3(p.x, K.EYE_H, p.z) : cam.position;
     head.position.copy(origin);
-    this.headTarget.position.copy(origin).addScaledVector(tp ? new THREE.Vector3(-Math.sin(p.yaw) * Math.cos(this.rig.pitch), Math.sin(this.rig.pitch), -Math.cos(p.yaw) * Math.cos(this.rig.pitch)) : forward, 10);
+    this.headTarget.position.copy(origin).addScaledVector(tp ? new THREE.Vector3(-Math.sin(p.viewYaw) * Math.cos(this.rig.pitch), Math.sin(this.rig.pitch), -Math.cos(p.viewYaw) * Math.cos(this.rig.pitch)) : forward, 10);
     let inten = 34 * clamp(p.battery / 30, 0.0, 1) * (0.6 + 0.4 * clamp(p.battery / 100, 0, 1));
     if (p.lightOn && p.battery < 22) {
       if (Math.sin(this.time * 31) + Math.sin(this.time * 17) > 1.2 - (22 - p.battery) * 0.04) inten *= 0.15;
@@ -1178,6 +1201,7 @@ export class Game {
     const sim = this.sim!;
     const p = sim.player;
     const cam = this.rig;
+    const nearGhost = !!sim.hidden && sim.ghosts.some((g) => g.lethal && Math.hypot(g.x - p.x, g.z - p.z) < 5.5);
     return {
       dt,
       listener: { x: cam.position.x, y: cam.position.y, z: cam.position.z, fx: cam.forward.x, fy: cam.forward.y, fz: cam.forward.z },
@@ -1193,6 +1217,9 @@ export class Game {
       sonar: p.sonarOpen,
       theme: sim.level.theme,
       darkness: this.darkness,
+      hidden: !!sim.hidden,
+      hiddenNearGhost: nearGhost,
+      dead: this.phase === "dying",
       dread: (this.settings.scares === "full" ? 1 : this.settings.scares === "reduced" ? 0.6 : 0.35) * (this.run ? DIFFICULTIES[this.run.diff].ambientScares : 1),
       ghosts: sim.ghosts.map((g) => ({
         kind: g.kind, x: g.x, y: 1.4, z: g.z, mode: g.mode, frozen: g.frozen, startled: g.startled,
@@ -1204,7 +1231,7 @@ export class Game {
   private render(dt: number): void {
     if (this.contextLost) return;
     const sim = this.sim;
-    if (sim && (this.phase === "playing" || this.phase === "levelclear" || this.phase === "victory")) {
+    if (sim && (this.phase === "playing" || this.phase === "dying" || this.phase === "levelclear" || this.phase === "victory")) {
       this.audio.update(this.audioFrame(dt));
     }
     this.scare.updateFlash(dt);
@@ -1240,6 +1267,7 @@ export class Game {
   private setPhase(p: Phase): void {
     if (this.phase === p) return;
     this.phase = p;
+    this.renderer.domElement.style.cursor = p === "playing" ? "crosshair" : "default";
     this.cb.onPhase(p);
   }
 

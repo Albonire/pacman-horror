@@ -7,13 +7,15 @@ import type { LevelDef } from "../config/campaign";
 import { type AABB, depenetrate, moveAndSlide } from "./collision";
 import type { SimEvent } from "./events";
 import {
-  GhostSim, chaseTarget, chooseFlee, chooseToward,
+  GhostSim, chooseFlee, chooseToward,
   type AIContext, type GhostKind,
 } from "./ghost";
+import { chaseTarget, isAlerted, noticePlayer } from "./hunt";
 import { generateLayout, type LevelLayout } from "./layout";
 import { DIRS, Maze, type Cell } from "./maze";
 import { PlayerSim, type PlayerInput } from "./player";
 import { mulberry32, type Rng } from "./rng";
+import { Trail } from "./trail";
 
 export type SimState = "playing" | "caught" | "complete";
 
@@ -50,7 +52,6 @@ export const BITE_STAMINA = 18;
 const BITE_RANGE = 2.1;
 const BATTERY_GAIN = 45;
 const SWITCH_LIT = 14;
-const SWITCH_ALERT_CELLS = 14;
 const HIDE_SEARCH_RANGE = 2.4;
 const HIDE_DEPTH = 0.82;
 const BITE_STUN = 1.7;
@@ -83,6 +84,8 @@ export class Simulation {
   hidden: HideSpotState | null = null;
   /** Algun fantasma vio al jugador entrar: lo seguira hasta el escondite. */
   hiddenSeen = false;
+  /** Algun fantasma oyo al jugador correr hacia el escondite: ira a inspeccionarlo. */
+  hiddenSuspected = false;
   private hideCd = 0;
   private prevLight = true;
   private searchT = new Map<GhostSim, number>();
@@ -108,7 +111,6 @@ export class Simulation {
   combo = 0;
 
   private ctx: AIContext;
-  private ctxNoMistake: AIContext;
 
   constructor(init: SimInit) {
     this.level = init.level;
@@ -154,9 +156,19 @@ export class Simulation {
       ghosts: this.ghosts,
       rng: this.rng,
       mistake: this.diff.mistake,
+      time: 0,
+      playerX: 0,
+      playerZ: 0,
+      playerView: [0, -1],
+      playerRunning: false,
+      trail: new Trail(),
+      trailDelay: this.diff.stalkerDelay,
+      memory: this.diff.memory,
+      searchTime: this.diff.searchTime,
+      viewCells: this.diff.viewCells,
+      fovCos: Math.cos((this.diff.fovDeg * Math.PI) / 360),
+      hearCells: this.diff.hearCells,
     };
-
-    this.ctxNoMistake = { ...this.ctx, mistake: 0 };
 
     this.respawnPlayer(true);
   }
@@ -175,12 +187,15 @@ export class Simulation {
       if (run > bestRun) { bestRun = run; bestDir = d; }
     }
     this.player.reset(w.x, w.z, Math.atan2(-bestDir[0], -bestDir[1]));
+    this.ctx.trail.clear();
+    this.ctx.trail.push(this.time, w.x, w.z);
     depenetrate(this.maze, this.colliders, this.player, K.PLAYER_RADIUS);
     this.player.invuln = first ? 0 : K.INVULN_TIME;
     this.state = "playing";
     this.caughtBy = null;
     this.hidden = null;
     this.hiddenSeen = false;
+    this.hiddenSuspected = false;
     this.searchT.clear();
     this.attemptTime = 0;
     this.frightTimer = 0;
@@ -252,7 +267,7 @@ export class Simulation {
     this.hideCd = Math.max(0, this.hideCd - dt);
     for (let i = 0; i < this.zoneLit.length; i++) this.zoneLit[i] = Math.max(0, this.zoneLit[i] - dt);
     if (input.interact) this.tryInteract();
-    const pin: PlayerInput = this.hidden ? { forward: 0, strafe: 0, sprint: false, sonar: false } : input;
+    const pin: PlayerInput = this.hidden ? { forward: 0, strafe: 0, sprint: false, sonar: false, lookBack: false } : input;
 
     const anyFrozen = this.ghosts.some((g) => g.frozen);
     this.player.update(dt, pin, this.maze, this.colliders, {
@@ -260,6 +275,7 @@ export class Simulation {
       batteryDrain: this.diff.batteryDrain,
       stareDrain: anyFrozen,
     }, this.events);
+    if (!this.hidden) this.ctx.trail.push(this.time, this.player.x, this.player.z);
 
     this.guardNumbers();
     this.biteCd = Math.max(0, this.biteCd - dt);
@@ -339,7 +355,7 @@ export class Simulation {
     const range = p.lightOn ? 24 : 6.5;
     if (d > range) return false;
     if (d < 0.3) return true;
-    const [fx, fz] = p.forwardVec();
+    const [fx, fz] = p.viewVec();
     if ((fx * dx + fz * dz) / d < GAZE_COS) return false;
     return this.maze.rayClear(p.x, p.z, g.x, g.z);
   }
@@ -347,8 +363,13 @@ export class Simulation {
   private updateGhosts(dt: number): void {
     const p = this.player;
     const ctx = this.ctx;
+    ctx.time = this.time;
+    ctx.playerX = p.x;
+    ctx.playerZ = p.z;
     ctx.playerCell = this.maze.worldToCell(p.x, p.z);
     ctx.playerHeading = p.heading;
+    ctx.playerView = p.viewHeading;
+    ctx.playerRunning = p.running;
     ctx.playerNoisy = !this.hidden && p.noise > 0.6;
     const baseSpeed = K.GHOST_SPEED_BASE * this.level.ghostSpeed * this.diff.ghostSpeed;
     const elroy = this.elroyLevel();
@@ -373,7 +394,7 @@ export class Simulation {
         if (gazed !== g.frozen) {
           g.frozen = gazed;
           g.watched = 0;
-          if (!gazed) g.dash = 0.8; // se lanza al dejar de ser observado
+          if (!gazed) g.dash = 1.0; // se lanza con fuerza al dejar de ser observado
           this.emit({ type: "frozen", ghost: g.kind, frozen: gazed });
         }
         if (g.frozen) g.watched += dt;
@@ -384,13 +405,16 @@ export class Simulation {
       if (g.dash > 0) g.dash -= dt;
       if (g.frozen) { g.refreshWorld(this.maze); continue; }
 
+      // percepcion y memoria (ver u oir al jugador)
+      if (g.mode === "scatter" || g.mode === "chase") noticePlayer(g, ctx, dt);
+
       const inTunnel = g.cy === this.maze.tunnelRow && (g.cx <= 2 || g.cx >= this.maze.W - 3);
       const tunnel = inTunnel ? K.GHOST_TUNNEL_FACTOR : 1;
       let wrapped = false;
 
       if (g.mode === "eaten") {
         g.speedCells = K.GHOST_EATEN_SPEED;
-        wrapped = g.advance(this.maze, dt, (gg) => chooseToward(gg, this.ctxNoMistake, gg.spawn));
+        wrapped = g.advance(this.maze, dt, (gg) => chooseToward(gg, this.ctx, gg.spawn, 0));
         if (g.cx === g.spawn[0] && g.cy === g.spawn[1]) {
           g.resetToSpawn(this.maze, "dormant");
           g.wakeTimer = 3.2;
@@ -402,13 +426,52 @@ export class Simulation {
         // scatter / chase
         let speed = baseSpeed * tunnel;
         let mode = g.mode;
-        if (this.hidden && !this.hiddenSeen && mode === "chase") mode = "scatter"; // perdio el rastro
+        if (this.hidden && !this.hiddenSeen && !this.hiddenSuspected && mode === "chase") mode = "scatter"; // perdio el rastro
+        // con memoria activa la dispersion se anula: el fantasma sigue cazando
+        if (isAlerted(g) && mode === "scatter") mode = "chase";
         if (g.kind === 0 && elroy > 0) { mode = "chase"; speed *= elroy === 2 ? 1.08 : 1.04; }
-        if (g.dash > 0) speed *= 1.5;
+        // el rastro del Acechador le da ventaja: solo a el, nunca a la velocidad global
+        if (g.kind === 0 && mode === "chase") speed *= this.diff.stalkerSpeed;
+        if (g.dash > 0) speed *= 1.65;
+
+        // Si el jugador lleva la linterna encendida en un pasillo largo, los fantasmas en scatter lo detectan a mayor distancia
+        if (!this.hidden && mode === "scatter" && this.player.lightOn && g.stun <= 0 && !g.frozen) {
+          const distToPlayer = Math.hypot(g.x - this.player.x, g.z - this.player.z);
+          if (distToPlayer < 14 && this.maze.rayClear(g.x, g.z, this.player.x, this.player.z, 0.4)) {
+            mode = "chase";
+          }
+        }
+
+        // Aceleracion depredadora cuando tienen linea de vision directa en persecucion
+        if (!this.hidden && mode === "chase" && !g.frozen && g.stun <= 0) {
+          const distToPlayer = Math.hypot(g.x - this.player.x, g.z - this.player.z);
+          if (distToPlayer < 9 && this.maze.rayClear(g.x, g.z, this.player.x, this.player.z, 0.35)) {
+            // El fantasma tiene contacto visual: aceleracion depredadora que escala con la dificultad
+            const surge = 1 + 0.12 * (1 - this.diff.mistake);
+            speed *= surge;
+          }
+        }
+        if (this.hidden) {
+          const distToHide = Math.hypot(g.x - this.hidden.x, g.z - this.hidden.z);
+          const st = this.searchT.get(g) ?? 0;
+          if (distToHide < HIDE_SEARCH_RANGE && st >= 0 && this.maze.rayClear(g.x, g.z, this.player.x, this.player.z, 0.4)) {
+            // ghost stops in front of the locker to inspect it
+            speed = 0;
+            g.yaw = Math.atan2(this.hidden.wall[0], this.hidden.wall[1]);
+          }
+        }
         g.speedCells = speed;
         wrapped = g.advance(this.maze, dt, (gg) => {
-          const target = mode === "scatter" ? gg.corner : this.maze.nearestWalkable(chaseTarget(gg, ctx));
-          return chooseToward(gg, ctx, target);
+          let target: Cell;
+          if (this.hidden && (this.hiddenSeen || this.hiddenSuspected)) {
+            // inspeccion activa del armario donde vieron u oyeron entrar al jugador
+            target = this.hidden.cell;
+          } else if (mode === "scatter") {
+            target = gg.corner;
+          } else {
+            target = this.maze.nearestWalkable(chaseTarget(gg, ctx));
+          }
+          return chooseToward(gg, ctx, target, gg.sawPlayer ? 0 : ctx.mistake);
         });
       }
       if (wrapped) this.emit({ type: "wrap", who: g.kind });
@@ -524,7 +587,15 @@ export class Simulation {
     const p = this.player;
     this.hidden = h;
     this.hideCd = 0.6;
-    this.hiddenSeen = this.ghosts.some((g) => g.lethal && Math.hypot(g.x - p.x, g.z - p.z) < 10 && this.maze.rayClear(p.x, p.z, g.x, g.z, 0.4));
+    const seen = this.ghosts.some((g) => g.lethal && Math.hypot(g.x - p.x, g.z - p.z) < 10 && this.maze.rayClear(p.x, p.z, g.x, g.z, 0.4));
+    const heard = !seen && (p.running || p.exhausted) && this.ghosts.some((g) => g.lethal && Math.hypot(g.x - p.x, g.z - p.z) < 12);
+    this.hiddenSeen = seen;
+    this.hiddenSuspected = heard;
+    // si nadie te vio ni te oyo entrar, pierden el rastro
+    if (!seen && !heard) {
+      for (const g of this.ghosts) { g.lastSeen = null; g.lostT = 0; g.sawPlayer = false; }
+      this.ctx.trail.clear();
+    }
     this.prevLight = p.flashlightOn;
     p.flashlightOn = false;
     p.sonarOpen = false; p.running = false;
@@ -539,19 +610,32 @@ export class Simulation {
     if (!h) return;
     this.hidden = null;
     this.hiddenSeen = false;
+    this.hiddenSuspected = false;
     this.hideCd = 0.6;
     p.x = h.x; p.z = h.z;
     if (this.prevLight && p.battery > 0 && !p.batteryLocked) p.flashlightOn = true;
     this.emit({ type: "hide", inside: false, seen: false });
   }
 
+  private get switchAlertCells(): number {
+    switch (this.diff.id) {
+      case "easy": return 9;
+      case "normal": return 11;
+      case "nightmare":
+      case "oneLife":
+      default:
+        return 14;
+    }
+  }
+
   private useSwitch(sw: SwitchState): void {
     this.zoneLit[sw.zone] = SWITCH_LIT;
-    // el chasquido del interruptor se oye por todo el sector
+    // el chasquido del interruptor se oye por el sector segun la dificultad
     const f = this.maze.distanceField([sw.cell]);
     let alerted = 0;
+    const alertDist = this.switchAlertCells;
     for (const g of this.ghosts) {
-      if (f[g.cy * this.maze.W + g.cx] > SWITCH_ALERT_CELLS) continue;
+      if (f[g.cy * this.maze.W + g.cx] > alertDist) continue;
       if (g.mode === "dormant") { if (g.wakeTimer <= 0) { g.startled = true; g.wakeTimer = 1.2; alerted++; } }
       else if (g.mode === "scatter") { g.mode = "chase"; g.reverseQueued = true; alerted++; }
     }
@@ -569,7 +653,11 @@ export class Simulation {
     }
   }
 
-  /** Un fantasma peligroso junto al escondite lo registra: tras 2 s lo descubre con 50 % de probabilidad. */
+  /**
+   * Un fantasma peligroso junto al escondite lo registra:
+   * si vio al jugador entrar la probabilidad de descubrirlo es muy alta (95 %),
+   * si lo oyo correr cerca es moderada (75 %), y si pasa por casualidad es baja (40 %).
+   */
   private updateSearch(dt: number): void {
     const h = this.hidden;
     if (!h) return;
@@ -581,16 +669,22 @@ export class Simulation {
       if (t < 0) { this.searchT.set(g, Math.min(0, t + dt)); continue; } // enfriamiento tras una busqueda fallida
       if (!near) { this.searchT.set(g, Math.max(0, t - dt)); continue; }
       t += dt;
-      if (t >= 2) {
-        if (this.rng() < 0.5) {
+      const inspectDuration = this.hiddenSeen ? 1.2 : this.hiddenSuspected ? 1.6 : 2.2;
+      if (t >= inspectDuration) {
+        const catchProb = this.hiddenSeen ? 0.95 : this.hiddenSuspected ? 0.75 : 0.40;
+        if (this.rng() < catchProb) {
           this.state = "caught";
           this.caughtBy = g;
           this.emit({ type: "caught", ghost: g.kind });
           return;
         }
+        this.hiddenSeen = false;
+        this.hiddenSuspected = false;
         this.searchT.set(g, -4);
         g.reverseQueued = true;
-      } else this.searchT.set(g, t);
+      } else {
+        this.searchT.set(g, t);
+      }
     }
   }
 

@@ -24,6 +24,7 @@ interface FixtureState {
   speed: number;
   level: number;
   color: THREE.Color;
+  baseColor: THREE.Color;
   /** Zona oscura a la que pertenece (-1 ninguna) y si esta en su borde (parpadea en vez de apagarse del todo). */
   zone: number;
   edge: boolean;
@@ -278,7 +279,7 @@ export class LevelView {
         const d = Math.hypot(zw.x - sp.x, zw.z - sp.z) / CELL;
         if (d <= z.r + 0.5 && zone < 0) { zone = zi; edge = d > z.r - 0.9; }
       });
-      this.fixtures.push({ x: sp.x, z: sp.z, dead, broken, phase: rng() * 6.28, speed: 5 + rng() * 9, level: 1, color: col, zone, edge });
+      this.fixtures.push({ x: sp.x, z: sp.z, dead, broken, phase: rng() * 6.28, speed: 5 + rng() * 9, level: 1, color: col, baseColor: col.clone(), zone, edge });
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), sp.alongX ? 0 : Math.PI / 2);
       this.tmpM.compose(new THREE.Vector3(sp.x, orb ? WALL_H - 0.5 : WALL_H - 0.045, sp.z), q, s);
       glow.setMatrixAt(i, this.tmpM);
@@ -361,14 +362,30 @@ export class LevelView {
       }
       if (f.zone >= 0 && !f.dead) {
         const lit = u.zoneLit[f.zone] ?? 0;
-        if (lit <= 0) lv = f.edge ? (hash2(Math.floor(t * 5) + i, i, 7) > 0.82 ? 0.4 : 0.02) : 0;
-        else if (lit < 2.5 || lit > 13.2) lv *= hash2(Math.floor(t * 28), i, 9) > 0.45 ? 1 : 0.15; // chisporrotea al encender y al apagarse
+        if (lit <= 0) {
+          // luz de emergencia tenue y roja en las zonas oscuras
+          const pulse = 0.5 + 0.5 * Math.sin(t * 2.6 + f.phase);
+          lv = f.edge ? 0.08 + 0.12 * pulse : 0.04 + 0.08 * pulse;
+          f.color.setHex(0xb82818);
+        } else if (lit < 2.5 || lit > 13.2) {
+          f.color.copy(f.baseColor);
+          lv *= hash2(Math.floor(t * 28), i, 9) > 0.45 ? 1 : 0.15; // chisporrotea al encender y al apagarse
+        } else {
+          f.color.copy(f.baseColor);
+        }
       }
       for (const g of u.ghosts) {
         const gd = Math.hypot(g.x - f.x, g.z - f.z);
         if (gd < 8 && hash2(Math.floor(t * 14), i, 11) < ((8 - gd) / 8) * 0.6) lv *= 0.06;
       }
       lv *= u.lightsMul;
+      if (u.lightsMul < 0.25 && !f.dead) {
+        // apagon: tenue luz de emergencia de evacuacion
+        f.color.setHex(0xa62014);
+        lv = Math.max(lv, 0.06 + 0.08 * (0.5 + 0.5 * Math.sin(t * 3.2 + f.phase)));
+      } else if (f.zone < 0 || (u.zoneLit[f.zone] ?? 0) > 0) {
+        f.color.copy(f.baseColor);
+      }
       if (u.powered) lv = lv * 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(t * 9 + f.phase));
       f.level = lv;
       if (mesh) {
@@ -386,8 +403,8 @@ export class LevelView {
       this.lastOrderT = t;
       const px = u.playerX, pz = u.playerZ;
       const fx = this.fixtures;
-      // las luminarias apagadas no ocupan un hueco del reparto de luces
-      const key = (i: number): number => (fx[i].x - px) ** 2 + (fx[i].z - pz) ** 2 + (fx[i].level < 0.06 ? 1e5 : 0);
+      // las luminarias apagadas o rotas no ocupan un hueco del reparto de luces
+      const key = (i: number): number => (fx[i].x - px) ** 2 + (fx[i].z - pz) ** 2 + (fx[i].dead || fx[i].level < 0.02 ? 1e5 : 0);
       this.lightOrder.sort((a, b) => key(a) - key(b));
     }
     for (let k = 0; k < this.fixtureLights.length; k++) {

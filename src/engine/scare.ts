@@ -97,15 +97,15 @@ function drawScreamFrame(
 
 /** Secuencia de fotogramas del susto de muerte (segundos desde el inicio, variante, zoom). */
 const DEATH_FRAMES: { a: number; b: number; v: ScareVariant; z: number }[] = [
-  { a: 0.5, b: 0.54, v: "full", z: 1.05 },
-  { a: 0.54, b: 0.575, v: "mouth", z: 1.0 },
-  { a: 0.575, b: 0.61, v: "neg", z: 1.12 },
-  { a: 0.61, b: 0.69, v: "full", z: 1.3 },
-  { a: 0.86, b: 0.89, v: "eyes", z: 1.0 },
-  { a: 0.89, b: 0.93, v: "mouth", z: 1.25 },
-  { a: 0.93, b: 1.0, v: "full", z: 1.55 },
-  { a: 1.05, b: 1.09, v: "neg", z: 1.4 },
-  { a: 1.09, b: 1.18, v: "mouth", z: 1.75 },
+  { a: 0.38, b: 0.43, v: "full", z: 1.15 },
+  { a: 0.43, b: 0.48, v: "mouth", z: 1.3 },
+  { a: 0.48, b: 0.53, v: "neg", z: 1.45 },
+  { a: 0.53, b: 0.62, v: "full", z: 1.6 },
+  { a: 0.72, b: 0.77, v: "eyes", z: 1.3 },
+  { a: 0.77, b: 0.83, v: "mouth", z: 1.55 },
+  { a: 0.83, b: 0.92, v: "neg", z: 1.75 },
+  { a: 0.92, b: 1.02, v: "full", z: 2.0 },
+  { a: 1.02, b: 1.15, v: "mouth", z: 2.2 },
 ];
 
 
@@ -134,7 +134,7 @@ export class ScareSystem {
     let c = this.faces.get(kind);
     if (!c) {
       const m = makeCanvas(1024, 1024);
-      drawGhostFace(m.ctx, kind, "scream", 1024, false);
+      drawGhostFace(m.ctx, kind, "scream", 1024, false, { quality: 1.8, jumpscare: 0.85 });
       // textura de piel sucia: moteado en "overlay" + manchas oscuras en "multiply" para romper el aspecto vectorial
       const N = 512;
       const mott = fbmField(N, N, 7, 7, 5, 300 + kind);
@@ -183,8 +183,16 @@ export class ScareSystem {
     this.startTarget.copy(eye).addScaledVector(forward, 3);
     this.headTarget.set(view.group.position.x, view.faceY + 0.1, view.group.position.z);
     view.forceScream();
-    this.d.audio.duck?.(0.04, 0.55); // un instante de silencio antes del impacto
-    this.d.audio.playDeathScream(kind);
+    const gain =
+      this.level === "off"
+        ? 0
+        : this.level === "nofullscreen"
+          ? 0.35
+          : this.level === "reduced"
+            ? 0.55
+            : 1.0;
+    this.d.audio.duck?.(0.01, 2.8); // duck audio during jumpscare sequence
+    this.d.audio.playDeathScream(kind, gain);
     this.d.rig.override = { pos: this.eye.clone(), target: this.startTarget.clone(), fov: 78, roll: 0 };
     this.resize();
   }
@@ -215,29 +223,30 @@ export class ScareSystem {
     view.group.rotation.y = Math.atan2(-hx / hl, -hz / hl);
     view.group.scale.setScalar(sc);
     view.group.position.set(faceNow.x + (hx / hl) * 0.48 * sc, faceNow.y - view.faceY * sc, faceNow.z + (hz / hl) * 0.48 * sc);
-    o.fov = 78 - 14 * Math.min(1, t / 0.14);
-    o.roll = Math.sin(t * 38) * 0.04 * ease;
-    this.d.rig.trauma = Math.min(1, 0.6 + ease * 0.6);
-    fx.glitch = 0.5 + ease * 1.0;
-    fx.aberration = 0.4 + ease * 0.8;
+    o.fov = 78 - 18 * Math.min(1, t / 0.12);
+    o.roll = Math.sin(t * 46) * 0.08 * ease + (Math.random() - 0.5) * 0.04 * ease;
+    this.d.rig.trauma = Math.min(1, 0.8 + ease * 0.8);
+    fx.glitch = 0.7 + ease * 1.3;
+    fx.aberration = 0.6 + ease * 1.2;
 
-    // 3) la cara 3D llena la pantalla; la cara 2D solo destella dos veces (estroboscopio)
+    // 3) la cara 3D llena la pantalla; la cara 2D destella en sincronia con el impacto
     this.resize();
     const c = this.d.canvas, ctx = this.ctx;
     ctx.clearRect(0, 0, c.width, c.height);
     c.style.opacity = "0";
-    if (t >= 0.44 && t < 0.5) fx.flash = Math.max(fx.flash, 0.85 - (t - 0.44) * 12);
+    if (t >= 0.36 && t < 0.48) fx.flash = Math.max(fx.flash, 0.95 - (t - 0.36) * 8);
     const fr = DEATH_FRAMES.findIndex((f) => t >= f.a && t < f.b);
-    if (fr >= 0 && this.level !== "off") {
+    if (fr >= 0 && this.level !== "off" && this.level !== "nofullscreen") {
       const f = DEATH_FRAMES[fr];
       if (fr !== this.lastFrame) {
         this.lastFrame = fr;
-        if (fr === 0 || fr === 4 || fr === 7) this.d.audio.playScareHit(fr === 0 ? 1 : fr === 4 ? 1.2 : 1.35);
+        if (fr === 0) this.d.audio.playScareHit(1.2);
         this.frameSeed = Math.floor(Math.random() * 1e6);
       }
       drawScreamFrame(ctx, c.width, c.height, this.face(this.deathKind), f.v, f.z + (t - f.a) * 0.5, this.frameSeed + Math.floor(t * 60));
       c.style.opacity = "1";
-      c.style.transform = `translate(${((Math.random() - 0.5) * 26).toFixed(1)}px, ${((Math.random() - 0.5) * 26).toFixed(1)}px) scale(1.04)`;
+      const jitter = 34 * (1 + ease * 0.5);
+      c.style.transform = `translate(${((Math.random() - 0.5) * jitter).toFixed(1)}px, ${((Math.random() - 0.5) * jitter).toFixed(1)}px) scale(${1.05 + (Math.random() - 0.5) * 0.08})`;
     } else {
       this.lastFrame = -1;
       c.style.transform = "";
@@ -269,7 +278,7 @@ export class ScareSystem {
 
   /** Cara fugaz a pantalla completa (susto ambiental). */
   flashFace(kind: FaceKind, seconds = 0.28): void {
-    if (this.level === "off" || this.deathRunning) return;
+    if (this.level === "off" || this.level === "nofullscreen" || this.deathRunning) return;
     this.flashT = 0;
     this.flashLen = this.level === "reduced" ? Math.min(seconds, 0.16) : seconds;
     this.flashKind = kind;

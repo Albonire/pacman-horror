@@ -82,16 +82,16 @@ export class CameraRig {
       return;
     }
 
-    const yaw = p.yaw + sx;
+    const yaw = p.viewYaw + sx;
     const pitch = this.pitch + sy;
-    const rx = Math.cos(p.yaw), rz = -Math.sin(p.yaw);
+    const rx = Math.cos(p.viewYaw), rz = -Math.sin(p.viewYaw);
 
     if (this.mode === "fp" || this.forceFp) {
       cam.position.set(p.x + rx * bobX, K.EYE_H + bobY, p.z + rz * bobX);
       cam.rotation.set(pitch, yaw, rollWalk + this.roll + sr);
     } else {
       // tercera persona: detras y arriba, acortada si hay un muro
-      const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
+      const fx = -Math.sin(p.viewYaw), fz = -Math.cos(p.viewYaw);
       const dist = Math.max(0.5, rayDistance(maze, p.x, p.z, -fx, -fz, 2.9) - 0.3);
       cam.position.set(p.x - fx * dist, K.EYE_H + 0.95 + bobY * 0.5 + Math.max(0, -this.pitch) * 1.2, p.z - fz * dist);
       cam.rotation.set(Math.min(0.3, pitch * 0.6 - 0.18), yaw, this.roll + sr);

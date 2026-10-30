@@ -1,6 +1,7 @@
 // Motor de audio de UMBRAL: implementa GameAudio con Web Audio (100% procedural).
 
 import type { ThemeId } from "../config/campaign";
+import type { FaceKind } from "../gfx/faces";
 import { Ambience, THEME_AUDIO } from "./ambience";
 import { Dread, type DreadKind } from "./dread";
 import { Drone, Siren } from "./music";
@@ -14,8 +15,8 @@ import { BreathEngine, GhostVoice } from "./voices";
  * (el compresor del bus maestro aporta ganancia de compensacion, asi que los transitorios suben mucho).
  */
 const MIX = {
-  waka: 0.4, step: 0.6, bite: 0.26, ghostEaten: 0.32, pellet: 0.5, heartbeat: 0.75, scream: 0.4,
-  screamerFlash: 0.3, scareHit: 0.4, pickup: 0.5, switchOn: 0.6, hide: 0.7, dread: 0.6, flashlight: 0.6, fruit: 0.5, wake: 0.6, pant: 1.1,
+  waka: 0.4, step: 0.6, bite: 0.26, ghostEaten: 0.32, pellet: 0.5, heartbeat: 0.75, scream: 0.8,
+  screamerFlash: 0.6, scareHit: 0.75, pickup: 0.5, switchOn: 0.6, hide: 0.7, dread: 0.6, flashlight: 0.6, fruit: 0.5, wake: 0.6, pant: 1.1,
 } as const;
 
 export class HorrorAudio implements GameAudio {
@@ -199,8 +200,14 @@ export class HorrorAudio implements GameAudio {
     this.ambience?.setDark(f.darkness);
     this.drone?.update(f.tension);
     this.siren?.update(f.dt, { progress: f.progress, chasing: f.chasing, tension: f.tension, powered: f.powered, powerLow: f.powerLow });
-    this.dread?.update({ dt: f.dt, tension: f.tension, chasing: f.chasing, intensity: f.dread * (1 + f.darkness * 1.2), listener: { x: f.listener.x, z: f.listener.z, fx: f.listener.fx, fz: f.listener.fz } });
-    this.breath.update(S, f.dt, { exertion: f.exertion, tension: f.tension, running: f.running, exhausted: f.exhausted });
+    // durante la muerte se corta todo lo organico: el silencio previo al grito debe ser real
+    if (!f.dead) {
+      this.dread?.update({ dt: f.dt, tension: f.tension, chasing: f.chasing, intensity: f.dread * (1 + f.darkness * 1.2), listener: { x: f.listener.x, z: f.listener.z, fx: f.listener.fx, fz: f.listener.fz } });
+      this.breath.update(S, f.dt, {
+        exertion: f.exertion, tension: f.tension, running: f.running, exhausted: f.exhausted,
+        hidden: f.hidden, hiddenNearGhost: f.hiddenNearGhost,
+      });
+    }
     for (const g of f.ghosts) {
       let v = this.voices.get(g.kind);
       if (!v) { v = new GhostVoice(S, g.kind); this.voices.set(g.kind, v); }
@@ -242,7 +249,7 @@ export class HorrorAudio implements GameAudio {
   playPing(): void { this.with((S) => fx.ping(S)); }
   playWaveChange(chase: boolean): void { this.with((S) => fx.waveChange(S, chase)); }
   playWrap(): void { this.with((S) => fx.wrap(S)); }
-  playDeathScream(kind: number): void { this.with((S) => fx.deathScream(S, kind), MIX.scream); }
+  playDeathScream(kind: FaceKind, gain = 1): void { this.with((S) => fx.deathScream(S, kind, gain), MIX.scream); }
   playGameOver(): void { this.with((S) => fx.gameOver(S)); }
   playUiClick(): void { this.with((S) => fx.uiClick(S)); }
   playStinger(strength: number): void { this.with((S) => fx.stinger(S, strength)); }

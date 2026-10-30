@@ -33,6 +33,10 @@ export const GHOST_EATEN_SPEED = 3.4; // celdas/s
 export const GHOST_TUNNEL_FACTOR = 0.7;
 export const GHOST_HEAR_RADIUS = 9; // celdas (distancia BFS)
 
+// ---------------- Mirada ----------------
+/** Giro de la vista al mantener Z (mirar por encima del hombro). */
+export const LOOK_BACK_ANGLE = (150 * Math.PI) / 180;
+
 // ---------------- Mecanicas ----------------
 export const DOT_EAT_RANGE = 0.78;
 export const PELLET_EAT_RANGE = 0.95;

@@ -3,6 +3,7 @@
 //   W/S o flechas arriba/abajo: avanzar / retroceder
 //   A/D: lateral.   Flechas izq/der: lateral (modo raton) o girar (modo teclado)
 //   Q: girar siempre.   Raton: mirar.   E: interactuar.   Shift: correr.   Espacio o clic derecho: sonar.
+//   Z: mirar por encima del hombro (solo la vista).
 
 import type { ControlMode } from "./settings";
 
@@ -36,9 +37,10 @@ export class Input {
   /** Cuando es true se evita el comportamiento por defecto de Espacio/Tab/flechas. */
   capture = false;
   private lockFailures = 0;
+  private lastLockErrAt = -Infinity;
   private ignoreLookUntil = 0;
-  /** Tras un rechazo con movimiento crudo se reintenta sin opciones en el siguiente clic. */
-  private plainLock = false;
+  private lastClientX: number | null = null;
+  private lastClientY: number | null = null;
 
   constructor(el: HTMLElement, cb: InputCallbacks) {
     this.el = el;
@@ -57,6 +59,8 @@ export class Input {
     this.el.addEventListener("mousedown", this.onMouseDown);
     window.addEventListener("mouseup", this.onMouseUp);
     this.el.addEventListener("contextmenu", this.onContext);
+    this.el.addEventListener("mouseenter", this.onMouseEnter);
+    this.el.addEventListener("mouseleave", this.onMouseLeave);
   }
 
   detach(): void {
@@ -71,24 +75,38 @@ export class Input {
     this.el.removeEventListener("mousedown", this.onMouseDown);
     window.removeEventListener("mouseup", this.onMouseUp);
     this.el.removeEventListener("contextmenu", this.onContext);
+    this.el.removeEventListener("mouseenter", this.onMouseEnter);
+    this.el.removeEventListener("mouseleave", this.onMouseLeave);
     if (document.pointerLockElement === this.el) document.exitPointerLock();
   }
 
   /** Pide el bloqueo del raton (debe llamarse desde un gesto del usuario). */
   requestLock(): void {
     if (this.mode === "keyboard" || this.locked) return;
-    const el = this.el as HTMLElement & { requestPointerLock: (o?: { unadjustedMovement?: boolean }) => Promise<void> | void };
+    const el = this.el;
     try {
-      // movimiento crudo si el navegador lo soporta; si lo rechaza se reintenta sin opciones
-      // en el proximo clic, que conserva el gesto del usuario.
-      const r = this.plainLock ? el.requestPointerLock() : el.requestPointerLock({ unadjustedMovement: true });
+      if (typeof el.focus === "function") el.focus();
+    } catch {
+      // focus error ignored
+    }
+    try {
+      const r = el.requestPointerLock();
       if (r && typeof (r as Promise<void>).catch === "function") {
-        (r as Promise<void>).catch(() => { this.plainLock = true; });
+        // Un fallo real dispara a la vez el rechazo de la promesa y el evento
+        // pointerlockerror: noteLockError los fusiona para no contar doble.
+        (r as Promise<void>).catch(() => this.noteLockError());
       }
     } catch {
-      this.plainLock = true;
-      try { el.requestPointerLock(); } catch { /* noop */ }
+      this.noteLockError();
     }
+  }
+
+  private noteLockError(): void {
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (now - this.lastLockErrAt < 120) return;
+    this.lastLockErrAt = now;
+    this.lockFailures++;
+    this.cb.onLockError();
   }
 
   releaseLock(): void {
@@ -135,11 +153,14 @@ export class Input {
 
   get sprint(): boolean { return this.down("ShiftLeft", "ShiftRight"); }
   get sonar(): boolean { return this.down("Space") || this.rmb; }
+  /** Mantener Z para mirar por encima del hombro. */
+  get lookBack(): boolean { return this.down("KeyZ"); }
 
   clear(): void {
     this.keys.clear();
     this.rmb = false;
     this.lookDX = 0; this.lookDY = 0;
+    this.lastClientX = null; this.lastClientY = null;
   }
 
   // ---- manejadores ----
@@ -164,22 +185,58 @@ export class Input {
 
   private onBlur = (): void => { this.clear(); };
 
+  private onMouseEnter = (e: MouseEvent): void => {
+    this.lastClientX = e.clientX;
+    this.lastClientY = e.clientY;
+  };
+
+  private onMouseLeave = (): void => {
+    this.lastClientX = null;
+    this.lastClientY = null;
+  };
+
   private onMouseMove = (e: MouseEvent): void => {
-    if (!this.locked) return;
-    // Chrome entrega un salto enorme en el primer evento tras capturar el raton: se ignora un instante
-    if (performance.now() < this.ignoreLookUntil) return;
-    const mx = Math.max(-160, Math.min(160, e.movementX || 0));
-    const my = Math.max(-160, Math.min(160, e.movementY || 0));
-    this.lookDX += mx;
-    this.lookDY += my;
+    if (!this.capture || this.mode === "keyboard") return;
+    if (this.locked) {
+      // Chrome entrega un salto enorme en el primer evento tras capturar el raton: se ignora un instante
+      if (performance.now() < this.ignoreLookUntil) return;
+      const mx = Math.max(-160, Math.min(160, e.movementX || 0));
+      const my = Math.max(-160, Math.min(160, e.movementY || 0));
+      this.lookDX += mx;
+      this.lookDY += my;
+    } else {
+      // Sin pointer lock activo (p. ej. en iframes restringidos): mirar con desplazamiento relativo
+      const hasMovement = typeof e.movementX === "number" && (e.movementX !== 0 || e.movementY !== 0);
+      let mx = 0;
+      let my = 0;
+      if (hasMovement) {
+        mx = e.movementX;
+        my = e.movementY;
+      } else if (this.lastClientX !== null && this.lastClientY !== null) {
+        mx = e.clientX - this.lastClientX;
+        my = e.clientY - this.lastClientY;
+      }
+      this.lastClientX = e.clientX;
+      this.lastClientY = e.clientY;
+      const clampedX = Math.max(-160, Math.min(160, mx || 0));
+      const clampedY = Math.max(-160, Math.min(160, my || 0));
+      this.lookDX += clampedX;
+      this.lookDY += clampedY;
+    }
   };
 
   private onMouseDown = (e: MouseEvent): void => {
     if (!this.capture) return;
     if (e.button === 2) { this.rmb = true; e.preventDefault(); }
     if (e.button === 0) {
-      if (!this.ready) this.requestLock();
-      else this.cb.onBite();
+      if (this.mode === "mouse" && !this.locked) {
+        this.requestLock();
+        if (this.failedLocks > 0) {
+          this.cb.onBite();
+        }
+      } else {
+        this.cb.onBite();
+      }
     }
   };
 
@@ -198,8 +255,7 @@ export class Input {
   };
 
   private onLockErr = (): void => {
-    this.lockFailures++;
-    this.cb.onLockError();
+    this.noteLockError();
   };
 
   get failedLocks(): number { return this.lockFailures; }

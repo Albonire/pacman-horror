@@ -15,13 +15,38 @@ export class BreathEngine {
   private timer = 1.2;
   private level = 0.1;
 
-  update(S: Synth, dt: number, st: { exertion: number; tension: number; running: boolean; exhausted: boolean }): void {
+  update(S: Synth, dt: number, st: { exertion: number; tension: number; running: boolean; exhausted: boolean; hidden?: boolean; hiddenNearGhost?: boolean }): void {
+    if (st.hidden) {
+      const fear = st.hiddenNearGhost ? 0.95 : clamp(st.tension * 0.8 + 0.35, 0.3, 0.9);
+      this.level += (fear - this.level) * Math.min(1, dt * 2.5);
+      this.timer -= dt;
+      if (this.timer <= 0) {
+        this.breathLocker(S, this.level, !!st.hiddenNearGhost);
+        this.timer = lerp(2.8, 1.3, this.level) * (0.85 + rnd() * 0.25);
+      }
+      return;
+    }
     const target = clamp(0.08 + st.exertion * 0.85 + st.tension * 0.4 + (st.running ? 0.25 : 0) + (st.exhausted ? 0.3 : 0), 0, 1);
     this.level += (target - this.level) * Math.min(1, dt * 1.5);
     this.timer -= dt;
     if (this.timer <= 0) {
       this.breath(S, this.level, st.exhausted);
       this.timer = lerp(4.6, 0.5, this.level) * (0.88 + rnd() * 0.24);
+    }
+  }
+
+  breathLocker(S: Synth, i: number, nearGhost: boolean): void {
+    const dur = nearGhost ? 0.75 : 1.15;
+    const vol = lerp(0.05, 0.16, i);
+    const t = S.now;
+    // inhalacion sorda y amortiguada por el metal
+    S.noise({ kind: "pink", t, dur: dur * 0.45, a: 0.15, vol: vol * 0.65, bp: 550, bp1: 1050, q: 2.2, dest: S.voice, send: 0.18 });
+    // exhalacion contenida
+    const te = t + dur * 0.4;
+    S.noise({ kind: "pink", t: te, dur: dur * 0.55, a: 0.1, vol: vol * 0.85, bp: 800, bp1: 420, q: 2.5, dest: S.voice, send: 0.22 });
+    if (nearGhost) {
+      // estertor asfixiado cuando el fantasma pasa junto al armario
+      S.tone({ type: "sawtooth", t, f0: 165, f1: 130, dur: dur * 0.35, a: 0.1, vol: vol * 0.2, lp: 420, dest: S.voice });
     }
   }
 
@@ -56,17 +81,10 @@ export class BreathEngine {
   }
 }
 
-/** Ganancia por tipo, calibrada midiendo RMS aislado a 6 u (objetivo ~0,03 en persecucion). */
-const KIND_GAIN = [1, 4, 5.5, 2];
-
-/** Voz posicional de un fantasma: cada uno tiene una firma sonora propia. */
+/** Voz posicional de un fantasma: silenciada durante el acecho (emboscada sin aviso acustico). */
 export class GhostVoice {
   private out: GainNode;
   private panner: PannerNode;
-  private nodes: AudioScheduledSourceNode[] = [];
-  private timer = 0;
-  private crackle: GainNode | null = null;
-  private lfoGain: GainNode | null = null;
 
   constructor(private S: Synth, readonly kind: number) {
     const ctx = S.ctx;
@@ -75,92 +93,16 @@ export class GhostVoice {
     this.panner = S.panner(0, 1, 0);
     this.out.connect(this.panner);
     this.panner.connect(S.sfx);
-    const send = ctx.createGain(); send.gain.value = 0.35;
-    this.panner.connect(send); send.connect(S.reverbSend);
-
-    const start = (n: AudioScheduledSourceNode) => { n.start(); this.nodes.push(n); };
-    if (kind === 0) {
-      // gruñido grave que respira
-      const o = ctx.createOscillator(); o.type = "sawtooth"; o.frequency.value = 52;
-      const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 190;
-      const g = ctx.createGain(); g.gain.value = 0.5;
-      o.connect(lp); lp.connect(g); g.connect(this.out);
-      const n = S.noiseSource("brown"); const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 240; bp.Q.value = 1.2;
-      const ng = ctx.createGain(); ng.gain.value = 0.7;
-      n.connect(bp); bp.connect(ng); ng.connect(this.out);
-      const lfo = ctx.createOscillator(); lfo.frequency.value = 0.55;
-      const lg = ctx.createGain(); lg.gain.value = 0.3; lfo.connect(lg); lg.connect(g.gain); lg.connect(ng.gain);
-      this.lfoGain = lg;
-      start(o); start(n); start(lfo);
-    } else if (kind === 2) {
-      // acufeno
-      for (const f of [3150, 3188]) {
-        const o = ctx.createOscillator(); o.type = "sine"; o.frequency.value = f;
-        const g = ctx.createGain(); g.gain.value = 0.05;
-        o.connect(g); g.connect(this.out); start(o);
-      }
-      const n = S.noiseSource("white"); const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 6500;
-      const ng = ctx.createGain(); ng.gain.value = 0.05;
-      n.connect(hp); hp.connect(ng); ng.connect(this.out); start(n);
-    } else if (kind === 3) {
-      // estatica que crepita
-      const n = S.noiseSource("white"); const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 1700; bp.Q.value = 0.6;
-      const g = ctx.createGain(); g.gain.value = 0.4;
-      n.connect(bp); bp.connect(g); g.connect(this.out);
-      this.crackle = g; start(n);
-    } else {
-      // Emboscadora: susurro de fondo (la caja de musica se programa en update)
-      const n = S.noiseSource("pink"); const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 2300; bp.Q.value = 3;
-      const g = ctx.createGain(); g.gain.value = 0.05;
-      n.connect(bp); bp.connect(g); g.connect(this.out); start(n);
-    }
   }
 
-  update(dt: number, g: AudioGhost, tension: number): void {
-    const S = this.S;
-    const t = S.now;
-    const dist = g.dist;
-    let base = 0;
-    switch (g.mode) {
-      case "dormant": base = g.startled ? 0.75 : 0.2; break;
-      case "scatter": base = 0.5; break;
-      case "chase": base = 0.85 + tension * 0.2; break;
-      case "frightened": base = 0.3; break;
-      default: base = 0;
-    }
-    if (g.frozen) base *= this.kind === 3 ? 1.2 : 0.4;
-    const df = Math.pow(clamp(1 - dist / 30, 0, 1), 1.5);
-    this.out.gain.setTargetAtTime(base * df * 0.9 * KIND_GAIN[this.kind], t, 0.12);
-    S.setPannerPos(this.panner, g.x, g.y, g.z);
-    if (this.lfoGain) this.lfoGain.gain.setTargetAtTime(g.mode === "chase" ? 0.45 : 0.25, t, 0.3);
-
-    this.timer -= dt;
-    if (this.timer > 0 || base * df < 0.02) return;
-    const k = this.kind;
-    if (k === 1 && g.mode !== "eaten") {
-      // caja de musica en menor
-      const scale = [659.25, 783.99, 880, 987.77, 1174.66, 1318.5];
-      const f = scale[Math.floor(rnd() * scale.length)];
-      S.tone({ f0: f, dur: 1.4, vol: 0.5, a: 0.004, dest: this.out });
-      S.tone({ f0: f * 2.76, dur: 0.7, vol: 0.12, a: 0.003, dest: this.out });
-      this.timer = (g.mode === "dormant" ? 1.9 : 0.6) + rnd() * 0.5;
-    } else if (k === 3) {
-      if (g.frozen) {
-        S.tone({ f0: 2200, dur: 0.03, vol: 0.5, dest: this.out });
-        this.timer = 0.33;
-        if (this.crackle) this.crackle.gain.setTargetAtTime(0.1, t, 0.05);
-      } else if (this.crackle) {
-        for (let s = 0; s < 4; s++) this.crackle.gain.setValueAtTime(rnd() < 0.55 ? 0.15 + rnd() * 0.85 : 0, t + s * 0.05);
-        this.timer = 0.2;
-      }
-    } else if (k === 0 && g.mode === "chase" && rnd() < 0.4) {
-      S.formantVoice({ f0: 90 + rnd() * 30, f1: 60, dur: 0.6, vol: 0.5, formants: [[300, 4, 1], [850, 6, 0.5]], dist: true, vibRate: 24, noiseMix: 0.2, dest: this.out, send: 0.2 });
-      this.timer = 1.4 + rnd() * 1.6;
-    } else this.timer = 0.4;
+  update(_dt: number, g: AudioGhost, _tension: number): void {
+    // Los fantasmas acechan en absoluto silencio (emboscada sin radar acustico previo)
+    this.out.gain.value = 0;
+    this.S.setPannerPos(this.panner, g.x, g.y, g.z);
   }
 
   dispose(): void {
-    for (const n of this.nodes) { try { n.stop(); } catch { /* ya parado */ } }
-    this.out.disconnect(); this.panner.disconnect();
+    this.out.disconnect();
+    this.panner.disconnect();
   }
 }

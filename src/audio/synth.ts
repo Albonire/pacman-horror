@@ -1,6 +1,8 @@
 // Nucleo de sintesis Web Audio: buses, reverberacion, ruido y ayudantes para tonos/rafagas.
 // Todo el audio de UMBRAL es procedural: no hay archivos externos.
 
+import { SCREAM_AUDIO_BASE64 } from "./screamData";
+
 export type NoiseKind = "white" | "pink" | "brown";
 
 export interface ToneOpts {
@@ -79,12 +81,12 @@ export class Synth {
     this.master = ctx.createGain();
     this.master.gain.value = this.volume;
     this.comp = ctx.createDynamicsCompressor();
-    // limitador de seguridad: casi transparente salvo en picos (la mezcla se controla con la tabla MIX)
-    this.comp.threshold.value = -4;
-    this.comp.knee.value = 6;
-    this.comp.ratio.value = 10;
-    this.comp.attack.value = 0.001;
-    this.comp.release.value = 0.15;
+    // limitador de seguridad master: controlado para dar pegada maxima sin bombeo ni recorte
+    this.comp.threshold.value = -2;
+    this.comp.knee.value = 8;
+    this.comp.ratio.value = 4.5;
+    this.comp.attack.value = 0.002;
+    this.comp.release.value = 0.08;
     // limitador suave (tanh) tras el compresor: evita el recorte digital en los gritos
     const clip = ctx.createWaveShaper();
     const curve = new Float32Array(1024) as Float32Array<ArrayBuffer>;
@@ -120,6 +122,31 @@ export class Synth {
     this.white = this.makeNoise(2.5, "white");
     this.pink = this.makeNoise(4, "pink");
     this.brown = this.makeNoise(4, "brown");
+    this.initScreamBuffer();
+  }
+
+  private screamBuffer: AudioBuffer | null = null;
+  getScreamBuffer(): AudioBuffer | null { return this.screamBuffer; }
+
+  private initScreamBuffer(): void {
+    if (typeof atob !== "function" || !this.ctx.decodeAudioData) return;
+    try {
+      const bin = atob(SCREAM_AUDIO_BASE64);
+      const len = bin.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+      const raw = bytes.buffer;
+      const p = this.ctx.decodeAudioData(
+        raw,
+        (buf) => { this.screamBuffer = buf; },
+        () => { /* fallback a procedural */ },
+      );
+      if (p && typeof p.then === "function") {
+        p.then((buf) => { this.screamBuffer = buf; }).catch(() => {});
+      }
+    } catch {
+      // Ignorado en contextos offline o sin soporte de decodificacion
+    }
   }
 
   get now(): number { return this.ctx.currentTime; }

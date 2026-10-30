@@ -17,6 +17,14 @@ export interface DifficultyDef {
   ambientScares: number; // frecuencia del director de sustos (1 = normal)
   extraGhosts: number; // fantasmas adicionales por encima de lo que define el nivel (max 4)
   scoreMult: number;
+  // IA de caceria
+  viewCells: number; // alcance visual en celdas
+  fovDeg: number; // apertura total del cono de vision
+  hearCells: number; // radio de oido en celdas
+  memory: number; // segundos recordando la ultima posicion vista u oida
+  searchTime: number; // segundos barriendo la zona tras perder el rastro
+  stalkerSpeed: number; // multiplicador exclusivo de El Acechador en persecucion
+  stalkerDelay: number; // retraso (s) del rastro que sigue El Acechador
 }
 
 export const DIFFICULTIES: Record<DifficultyId, DifficultyDef> = {
@@ -35,6 +43,13 @@ export const DIFFICULTIES: Record<DifficultyId, DifficultyDef> = {
     ambientScares: 0.6,
     extraGhosts: 0,
     scoreMult: 1,
+    viewCells: 6,
+    fovDeg: 100,
+    hearCells: 6,
+    memory: 2.0,
+    searchTime: 2.0,
+    stalkerSpeed: 1.10,
+    stalkerDelay: 2.6,
   },
   normal: {
     id: "normal",
@@ -51,6 +66,13 @@ export const DIFFICULTIES: Record<DifficultyId, DifficultyDef> = {
     ambientScares: 1,
     extraGhosts: 0,
     scoreMult: 1.5,
+    viewCells: 9,
+    fovDeg: 110,
+    hearCells: 9,
+    memory: 3.5,
+    searchTime: 3,
+    stalkerSpeed: 1.35,
+    stalkerDelay: 1.8,
   },
   nightmare: {
     id: "nightmare",
@@ -67,6 +89,13 @@ export const DIFFICULTIES: Record<DifficultyId, DifficultyDef> = {
     ambientScares: 1.6,
     extraGhosts: 1,
     scoreMult: 2.5,
+    viewCells: 11,
+    fovDeg: 120,
+    hearCells: 11,
+    memory: 5,
+    searchTime: 3.5,
+    stalkerSpeed: 1.45,
+    stalkerDelay: 1.2,
   },
   oneLife: {
     id: "oneLife",
@@ -83,6 +112,13 @@ export const DIFFICULTIES: Record<DifficultyId, DifficultyDef> = {
     ambientScares: 1.8,
     extraGhosts: 1,
     scoreMult: 4,
+    viewCells: 12,
+    fovDeg: 120,
+    hearCells: 12,
+    memory: 5.5,
+    searchTime: 4,
+    stalkerSpeed: 1.45,
+    stalkerDelay: 1.2,
   },
 };
 

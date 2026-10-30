@@ -78,8 +78,39 @@ describe("zonas oscuras, pilas, escondites e interruptores", () => {
       expect(sim.layout.zones.length).toBeGreaterThanOrEqual(2);
       expect(sim.batteries.length).toBeGreaterThanOrEqual(3);
       expect(sim.hideSpots.length).toBeGreaterThanOrEqual(3);
-      expect(sim.switches.length).toBeGreaterThanOrEqual(1);
+      expect(sim.switches.length).toBe(sim.layout.zones.length);
       expect(K.BATTERY_MAX).toBe(100);
     }
+  });
+
+  it("inspeccion activa de armarios: si un fantasma ve o escucha entrar al jugador, investiga activamente", () => {
+    const sim = mk(); quietGhosts(sim);
+    const h = sim.hideSpots[0];
+    const g = sim.ghosts[0];
+    g.mode = "chase";
+    g.x = h.x + 3; g.z = h.z; g.cx = h.cell[0] + 3; g.cy = h.cell[1];
+    sim.player.x = h.x; sim.player.z = h.z;
+    sim.player.running = true;
+    sim.update(DT, { ...NO_INPUT, interact: true });
+    expect(sim.hidden).toBe(h);
+    expect(sim.hiddenSeen || sim.hiddenSuspected).toBe(true);
+  });
+
+  it("un fantasma que llega al armario se detiene a inspeccionarlo sin avanzar de largo", () => {
+    const sim = mk(() => 0.05); quietGhosts(sim);
+    const h = sim.hideSpots[0];
+    sim.player.x = h.x; sim.player.z = h.z; sim.player.invuln = 0;
+    sim.update(DT, { ...NO_INPUT, interact: true });
+    const g = sim.ghosts[0];
+    g.cx = h.cell[0]; g.cy = h.cell[1]; g.mode = "chase"; g.p = 0; g.moving = true; g.refreshWorld(sim.maze);
+    sim.waveMode = "chase"; sim.waveTimer = 1e9;
+    // Avanzamos unos frames: el fantasma debe detectar que esta cerca y detener su velocidad a 0 para registrar
+    sim.update(DT, NO_INPUT);
+    expect(g.speedCells).toBe(0);
+    // Tras la duracion de inspeccion con rng bajo, atrapa al jugador
+    for (let i = 0; i < 60 * 2.5 && sim.state === "playing"; i++) {
+      sim.update(DT, NO_INPUT);
+    }
+    expect(sim.state).toBe("caught");
   });
 });

@@ -1,6 +1,7 @@
 // Efectos de un solo disparo (todos sinteticos). Cada funcion recibe el Synth y parametros ligeros.
 
 import type { Synth } from "./synth";
+import type { FaceKind } from "../gfx/faces";
 
 const rnd = Math.random;
 
@@ -147,65 +148,157 @@ export function wrap(S: Synth): void {
  * 2) impacto grave + el grito en coro (voz principal, octava inferior y tres voces desafinadas),
  * 3) chillido ametrallado (AM rapida) y 4) corte seco con acufeno y latidos.
  */
-export function deathScream(S: Synth, kind: number): void {
+export function deathScream(S: Synth, kind: FaceKind, gain = 1): void {
+  if (gain <= 0) return;
   const P = [
-    { f0: 360, f1: 1500, formants: [[700, 6, 1], [1250, 8, 0.9], [2600, 9, 0.6]] as [number, number, number][], growl: true },
-    { f0: 640, f1: 2300, formants: [[900, 7, 1], [1900, 9, 1], [3300, 10, 0.8]] as [number, number, number][], growl: false },
-    { f0: 880, f1: 3200, formants: [[1100, 8, 1], [2400, 10, 0.9], [4200, 12, 0.7]] as [number, number, number][], growl: false },
-    { f0: 300, f1: 1300, formants: [[600, 5, 1], [1500, 8, 0.8], [3000, 9, 0.7]] as [number, number, number][], growl: true },
+    { f0: 420, f1: 1850, formants: [[820, 2.6, 1.5], [1850, 3.2, 1.3], [3200, 4.0, 1.0], [4400, 5.0, 0.7]] as [number, number, number][], growl: true },
+    { f0: 820, f1: 3100, formants: [[950, 2.8, 1.6], [2200, 3.4, 1.4], [3600, 4.2, 1.1], [4800, 5.0, 0.8]] as [number, number, number][], growl: false },
+    { f0: 680, f1: 2600, formants: [[880, 2.7, 1.5], [1950, 3.3, 1.3], [3400, 4.0, 1.0], [4200, 4.8, 0.8]] as [number, number, number][], growl: false },
+    { f0: 340, f1: 1600, formants: [[680, 2.4, 1.4], [1600, 3.0, 1.2], [2900, 3.8, 1.0], [4000, 4.5, 0.7]] as [number, number, number][], growl: true },
   ][kind % 4];
   const t0 = S.now;
-  const hit = t0 + 0.42;
-  const dur = 1.45;
+  const hit = t0 + 0.38;
+  const dur = 1.55;
 
-  // 1) crescendo previo
-  S.noise({ kind: "pink", bp: 300, bp1: 4200, q: 1.4, dur: 0.42, a: 0.4, vol: 0.5, t: t0, send: 0.2 });
-  for (let i = 0; i < 4; i++) S.tone({ type: "sawtooth", f0: 220 * (1 + i * 0.12), f1: 880 * (1 + i * 0.12), t: t0, dur: 0.44, a: 0.4, vol: 0.06, lp: 2600, detune: (i - 1.5) * 14, send: 0.4 });
-  S.tone({ f0: 50, f1: 110, t: t0, dur: 0.44, a: 0.4, vol: 0.35, lp: 200 });
+  // sub-bass impact at hit
+  S.tone({ f0: 92, f1: 20, t: hit, dur: 1.45, vol: 1.15 * Math.min(1, gain), a: 0.001 });
+  S.noise({ kind: "brown", lp: 300, t: hit, dur: 1.1, vol: 1.0 * Math.min(1, gain), a: 0.002 });
+  S.noise({ hp: 1100, t: hit, dur: 1.25, vol: 0.85 * Math.min(1, gain), a: 0.002, send: 0.4 });
 
-  // 2) impacto + coro de gritos
-  S.tone({ f0: 74, f1: 22, t: hit, dur: 1.3, vol: 1.0, a: 0.003 });
-  S.noise({ kind: "brown", lp: 240, t: hit, dur: 1.0, vol: 0.8, a: 0.003 });
-  S.noise({ hp: 700, t: hit, dur: 1.1, vol: 0.5, a: 0.003, send: 0.3 });
-  S.formantVoice({ t: hit, f0: P.f0, f1: P.f1, dur, vol: 0.66, a: 0.015, formants: P.formants, dist: true, vibRate: 14, vibDepth: 55, noiseMix: 0.2, send: 0.35 });
-  S.formantVoice({ t: hit, f0: P.f0 * 0.5, f1: P.f1 * 0.52, dur: dur * 0.95, vol: 0.4, a: 0.03, formants: P.formants, dist: true, vibRate: 9, vibDepth: 70, send: 0.3 });
-  for (let i = 0; i < 3; i++) {
-    const d = (i + 1) * 0.035;
-    S.formantVoice({ t: hit + d, f0: P.f0 * (0.9 + i * 0.13), f1: P.f1 * (0.8 + i * 0.17), dur: dur * (0.85 - i * 0.05), vol: 0.3, a: 0.03, formants: P.formants, dist: true, vibRate: 11 + i * 3, vibDepth: 80, noiseMix: 0.15, send: 0.5 });
+  // voice sample playback with filters or procedural formant fallback
+  const screamBuf = S.getScreamBuffer();
+  if (screamBuf) {
+    const src = S.ctx.createBufferSource();
+    src.buffer = screamBuf;
+    src.playbackRate.value = 0.93 + (kind % 4) * 0.035;
+
+    const hp = S.ctx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 85;
+
+    const eq = S.ctx.createBiquadFilter();
+    eq.type = "peaking";
+    eq.frequency.value = 3100;
+    eq.Q.value = 1.2;
+    eq.gain.value = 2.5;
+
+    const lp = S.ctx.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.value = 9500;
+
+    const vol = Math.min(1.0, Math.max(0.1, 0.7 * gain * S.trim));
+    const screamGain = S.ctx.createGain();
+    screamGain.gain.setValueAtTime(0.0001, hit);
+    screamGain.gain.linearRampToValueAtTime(vol, hit + 0.012);
+    screamGain.gain.setValueAtTime(vol, hit + 1.85);
+    screamGain.gain.exponentialRampToValueAtTime(0.0001, hit + 2.25);
+
+    src.connect(hp);
+    hp.connect(eq);
+    eq.connect(lp);
+    lp.connect(screamGain);
+    S.out(screamGain, S.voice, 0.12);
+
+    src.start(hit);
+    src.stop(hit + 2.3);
+  } else {
+    // formant vocal synthesis strictly as fallback when sample buffer is null
+    S.formantVoice({
+      t: hit,
+      f0: P.f0,
+      f1: P.f1,
+      dur,
+      vol: 0.95 * Math.min(1, gain),
+      a: 0.005,
+      formants: P.formants,
+      dist: true,
+      vibRate: 36,
+      vibDepth: 120,
+      noiseMix: 0.4,
+      send: 0.4,
+    });
+
+    S.formantVoice({
+      t: hit + 0.02,
+      f0: P.f0 * 1.06,
+      f1: P.f1 * 0.92,
+      dur: dur * 0.9,
+      vol: 0.75 * Math.min(1, gain),
+      a: 0.01,
+      formants: P.formants,
+      dist: true,
+      vibRate: 42,
+      vibDepth: 140,
+      noiseMix: 0.35,
+      send: 0.45,
+    });
+
+    S.formantVoice({
+      t: hit,
+      f0: P.f0 * 0.5,
+      f1: P.f1 * 0.48,
+      dur: dur * 0.85,
+      vol: 0.65 * Math.min(1, gain),
+      a: 0.015,
+      formants: P.formants,
+      dist: true,
+      vibRate: 26,
+      vibDepth: 90,
+      noiseMix: 0.3,
+      send: 0.3,
+    });
+
+    if (P.growl) {
+      S.formantVoice({
+        t: hit,
+        f0: 72,
+        f1: 42,
+        dur: 1.5,
+        vol: 0.8 * Math.min(1, gain),
+        formants: [[260, 3.5, 1.4], [780, 4.5, 1.0]],
+        dist: true,
+        vibRate: 48,
+        vibDepth: 160,
+        noiseMix: 0.45,
+      });
+    }
   }
-  if (P.growl) S.formantVoice({ t: hit, f0: 62, f1: 38, dur: 1.5, vol: 0.55, formants: [[260, 4, 1], [800, 6, 0.6]], dist: true, vibRate: 32, vibDepth: 90, noiseMix: 0.3 });
 
-  // 3) chillido ametrallado: portadora aguda con amplitud modulada a 60-80 Hz
-  const ctx = S.ctx;
-  const car = ctx.createOscillator(); car.type = "sawtooth";
-  car.frequency.setValueAtTime(2000, hit); car.frequency.exponentialRampToValueAtTime(3600, hit + dur * 0.8);
-  const am = ctx.createOscillator(); am.frequency.value = 66;
-  const amg = ctx.createGain(); amg.gain.value = 0.5;
-  const shaper = ctx.createGain(); shaper.gain.value = 0.5;
-  am.connect(amg); amg.connect(shaper.gain);
-  const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 3000; bp.Q.value = 1.2;
-  const env = ctx.createGain();
-  env.gain.setValueAtTime(0.0001, hit); env.gain.linearRampToValueAtTime(0.12 * S.trim, hit + 0.04); env.gain.exponentialRampToValueAtTime(0.0001, hit + dur * 0.9);
-  car.connect(shaper); shaper.connect(bp); bp.connect(env); S.out(env, S.sfx, 0.3);
-  car.start(hit); am.start(hit); car.stop(hit + dur); am.stop(hit + dur);
-  for (let i = 0; i < 5; i++) S.tone({ type: "sawtooth", f0: 680 + i * 11, f1: 1180 + i * 17, t: hit, dur: 1.0, vol: 0.05, lp: 3200, a: 0.03, detune: (i - 2) * 9, send: 0.4 });
-  if (kind === 2) { S.tone({ f0: 3400, t: hit, dur: 1.2, vol: 0.06 }); S.tone({ f0: 3470, t: hit, dur: 1.2, vol: 0.06 }); }
-  if (kind === 3) S.noise({ bp: 2200, q: 0.5, t: hit, dur: 1.2, vol: 0.4, a: 0.01 });
-
-  // 4) corte seco -> acufeno y latidos
-  const tail = hit + dur + 0.05;
-  S.tone({ f0: 4300, t: tail, dur: 1.4, vol: 0.05, a: 0.02 });
-  S.tone({ f0: 4390, t: tail, dur: 1.2, vol: 0.03, a: 0.02 });
-  for (let i = 0; i < 3; i++) S.tone({ f0: 56, f1: 36, t: tail + 0.2 + i * 0.62, dur: 0.2, vol: 0.45 - i * 0.1, lp: 160, a: 0.012 });
+  // dry tinnitus tail and dying heartbeats between hit + 1.8s and hit + 2.5s
+  const tTail = hit + 1.8;
+  S.tone({ f0: 4180, t: tTail, dur: 1.4, vol: 0.1 * Math.min(1, gain), a: 0.02 });
+  for (let i = 0; i < 3; i++) {
+    S.tone({
+      f0: 54,
+      f1: 32,
+      t: tTail + 0.05 + i * 0.3,
+      dur: 0.2,
+      vol: (0.5 - i * 0.12) * Math.min(1, gain),
+      lp: 180,
+      a: 0.01,
+    });
+  }
 }
 
 /** Golpe de susto sincronizado con cada destello de la cara: acorde disonante, aire y sub-grave. */
 export function scareHit(S: Synth, strength: number): void {
-  const s = Math.max(0.3, Math.min(1.3, strength));
-  [233.1, 246.9, 277.2, 349.2, 370].forEach((f, i) => S.tone({ type: "sawtooth", f0: f * 2, f1: f * 1.9, dur: 0.32, vol: 0.07 * s, lp: 3000, a: 0.002, detune: (i - 2) * 11, send: 0.3 }));
-  S.noise({ hp: 900, dur: 0.22, vol: 0.55 * s, a: 0.002 });
-  S.tone({ f0: 80, f1: 26, dur: 0.45, vol: 0.9 * s, a: 0.002 });
-  S.tone({ type: "square", f0: 3100, f1: 1200, dur: 0.12, vol: 0.05 * s, a: 0.002 });
+  const s = Math.max(0.4, Math.min(1.5, strength));
+  [233.1, 246.9, 277.2, 349.2, 370, 466.2].forEach((f, i) =>
+    S.tone({
+      type: "sawtooth",
+      f0: f * 2.2,
+      f1: f * 1.8,
+      dur: 0.35,
+      vol: 0.12 * s,
+      lp: 3800,
+      a: 0.001,
+      detune: (i - 2.5) * 16,
+      send: 0.4,
+    }),
+  );
+  S.noise({ hp: 800, dur: 0.28, vol: 0.8 * s, a: 0.001 });
+  S.tone({ f0: 88, f1: 24, dur: 0.5, vol: 1.0 * s, a: 0.001 });
+  S.tone({ type: "square", f0: 3600, f1: 1400, dur: 0.15, vol: 0.1 * s, a: 0.001 });
 }
 
 export function gameOver(S: Synth): void {

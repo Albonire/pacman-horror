@@ -2,7 +2,7 @@
 
 import { CAMPAIGN } from "../config/campaign";
 
-export type ScareLevel = "full" | "reduced" | "off";
+export type ScareLevel = "full" | "reduced" | "nofullscreen" | "off";
 export type Quality = "high" | "medium" | "low";
 export type ControlMode = "mouse" | "keyboard";
 
@@ -50,6 +50,7 @@ export const DEFAULT_PROGRESS: Progress = {
 
 const SETTINGS_KEY = "umbral.settings.v1";
 const PROGRESS_KEY = "umbral.progress.v1";
+const MIGRATION_CONTROL_KEY = "umbral.migrated.control_v2";
 
 function read<T extends object>(key: string, fallback: T): T {
   try {
@@ -66,7 +67,7 @@ function write(key: string, value: object): void {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    /* almacenamiento no disponible: se ignora */
+    // storage not available
   }
 }
 
@@ -81,7 +82,7 @@ export function sanitizeSettings(s: Settings): Settings {
     fov: clamp(Number(s.fov) || 90, 60, 115),
     volume: clamp(Number.isFinite(Number(s.volume)) ? Number(s.volume) : 0.8, 0, 1),
     brightness: clamp(Number(s.brightness) || 1, 0.6, 1.8),
-    scares: (["full", "reduced", "off"] as const).includes(s.scares) ? s.scares : "full",
+    scares: (["full", "reduced", "nofullscreen", "off"] as const).includes(s.scares) ? s.scares : "full",
     quality: (["high", "medium", "low"] as const).includes(s.quality) ? s.quality : "high",
     controlMode: s.controlMode === "keyboard" ? "keyboard" : "mouse",
   };
@@ -89,7 +90,21 @@ export function sanitizeSettings(s: Settings): Settings {
 
 export function loadSettings(): Settings {
   const s = read(SETTINGS_KEY, DEFAULT_SETTINGS);
-  if (s.fov === 78) s.fov = DEFAULT_SETTINGS.fov; // antiguo valor por defecto (era vertical)
+  if (s.fov === 78) s.fov = DEFAULT_SETTINGS.fov; // old default value (vertical fov)
+  // migrate legacy controlMode: "keyboard" caused by previous bug in onLockError
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      if (window.localStorage.getItem(MIGRATION_CONTROL_KEY) !== "1") {
+        window.localStorage.setItem(MIGRATION_CONTROL_KEY, "1");
+        if (s.controlMode === "keyboard") {
+          s.controlMode = "mouse";
+          write(SETTINGS_KEY, s);
+        }
+      }
+    }
+  } catch {
+    // localStorage not available
+  }
   return sanitizeSettings(s);
 }
 export function saveSettings(s: Settings): void { write(SETTINGS_KEY, s); }

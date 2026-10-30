@@ -86,7 +86,7 @@ export class Radar {
     }
 
     // jugador: Pac-Man con cono de vision. yaw 0 mira hacia arriba (-Z).
-    const yaw = sim.player.yaw;
+    const yaw = sim.player.viewYaw;
     const ang = -yaw - Math.PI / 2; // angulo de lienzo (0 = derecha)
     ctx.save();
     ctx.translate(ppx, ppy);

@@ -15,6 +15,8 @@ export interface PlayerInput {
   bite?: boolean;
   /** Pulsacion de interactuar (esconderse, palanca) en este tick. */
   interact?: boolean;
+  /** Mantener para mirar por encima del hombro (solo cambia la vista, no el movimiento). */
+  lookBack?: boolean;
 }
 
 export const NO_INPUT: PlayerInput = { forward: 0, strafe: 0, sprint: false, sonar: false };
@@ -31,6 +33,8 @@ export class PlayerSim {
   x = 0;
   z = 0;
   yaw = 0; // 0 mira hacia -Z; positivo gira a la izquierda
+  /** Direccion de la camara: igual a yaw, o girada al mirar atras con Z. */
+  viewYaw = 0;
   vx = 0;
   vz = 0;
   speed = 0;
@@ -44,13 +48,15 @@ export class PlayerSim {
   batteryLocked = false; // tras vaciarse hay que recargar un poco antes de volver a encender
   noise = 0; // 0..1, lo oyen algunos fantasmas
   heading: Cell = [0, -1];
+  /** Direccion cardinal de la mirada (no la del movimiento). */
+  viewHeading: Cell = [0, -1];
   invuln = 0;
 
   private stepAcc = 0;
   private moveHeading: Cell = [0, -1];
 
   reset(x: number, z: number, yaw: number): void {
-    this.x = x; this.z = z; this.yaw = yaw;
+    this.x = x; this.z = z; this.yaw = yaw; this.viewYaw = yaw;
     this.vx = 0; this.vz = 0; this.speed = 0;
     this.moving = false; this.running = false; this.exhausted = false; this.sonarOpen = false;
     this.stamina = K.STAMINA_MAX;
@@ -62,6 +68,8 @@ export class PlayerSim {
   /** Vector unitario hacia delante en el plano XZ. */
   forwardVec(): [number, number] { return [-Math.sin(this.yaw), -Math.cos(this.yaw)]; }
   rightVec(): [number, number] { return [Math.cos(this.yaw), -Math.sin(this.yaw)]; }
+  /** Vector de mirada (puede estar girado por Z sin mover el cuerpo). */
+  viewVec(): [number, number] { return [-Math.sin(this.viewYaw), -Math.cos(this.viewYaw)]; }
 
   toggleFlashlight(): void {
     if (this.flashlightOn) this.flashlightOn = false;
@@ -128,6 +136,11 @@ export class PlayerSim {
     }
     this.heading = this.moving && this.speed > 0.8 ? this.moveHeading
       : Math.abs(fx) > Math.abs(fz) ? [Math.sign(fx), 0] : [0, Math.sign(fz)];
+
+    // la vista puede girarse con Z sin cambiar la direccion de movimiento
+    this.viewYaw = this.yaw + (input.lookBack ? K.LOOK_BACK_ANGLE : 0);
+    const [vx, vz] = this.viewVec();
+    this.viewHeading = Math.abs(vx) > Math.abs(vz) ? [Math.sign(vx), 0] : [0, Math.sign(vz)];
 
     // estamina
     if (this.running) {
