@@ -83,6 +83,9 @@ export default function App() {
 
   // ---- acciones ----
   const game = () => gameRef.current;
+  const ensureAudio = useCallback(() => {
+    gameRef.current?.audio.resume();
+  }, []);
   const changeSettings = useCallback((s: Settings) => {
     setSettings(s);
     saveSettings(s);
@@ -107,7 +110,7 @@ export default function App() {
   const warningNeeded = phase === "menu" && !progress.warningAccepted;
 
   return (
-    <div className="fixed inset-0 bg-black overflow-hidden select-none font-crt">
+    <div className="fixed inset-0 bg-black overflow-hidden select-none font-crt" onPointerDown={ensureAudio}>
       <div ref={containerRef} className="absolute inset-0" />
       <canvas ref={scareRef} className="scare-canvas" />
       <HudView ref={hudRef} radarRef={radarRef} />

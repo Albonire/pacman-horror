@@ -44,11 +44,36 @@ export class HorrorAudio implements GameAudio {
   private pending: { fn: (S: Synth) => void; mix: number; t: number }[] = [];
   private buf: Float32Array<ArrayBuffer> | null = null;
   private gestureBound = false;
+  private earlyBound = false;
   onStatus?: (msg: string) => void;
   lastPeak = 0;
 
   /** `factory` y `assumeRunning` permiten pruebas con un OfflineAudioContext. */
-  constructor(private factory?: () => AudioContext, private assumeRunning = false) {}
+  constructor(private factory?: () => AudioContext, private assumeRunning = false) {
+    if (!this.assumeRunning && typeof window !== "undefined") {
+      this.bindEarlyGestures();
+    }
+  }
+
+  private bindEarlyGestures(): void {
+    if (this.earlyBound || typeof window === "undefined") return;
+    this.earlyBound = true;
+    for (const ev of ["pointerdown", "keydown", "touchstart", "click"]) {
+      window.addEventListener(ev, this.onEarlyGesture, true);
+    }
+  }
+
+  private unbindEarlyGestures(): void {
+    if (!this.earlyBound || typeof window === "undefined") return;
+    this.earlyBound = false;
+    for (const ev of ["pointerdown", "keydown", "touchstart", "click"]) {
+      window.removeEventListener(ev, this.onEarlyGesture, true);
+    }
+  }
+
+  private onEarlyGesture = (): void => {
+    this.resume();
+  };
 
   /** Debe llamarse desde un gesto del usuario (clic/tecla). */
   resume(): void {
@@ -62,6 +87,7 @@ export class HorrorAudio implements GameAudio {
     this.suspended = false;
     this.wantRunning = true;
     this.apply();
+    if (this.S?.ctx.state === "running") this.unbindEarlyGestures();
   }
 
   suspend(): void {
@@ -112,7 +138,10 @@ export class HorrorAudio implements GameAudio {
 
   /** Cualquier gesto del usuario es una oportunidad para reanudar un contexto que el navegador haya detenido. */
   private kick = (): void => {
-    if (this.wantRunning && this.S && this.S.ctx.state !== "running") this.apply();
+    if (this.wantRunning) {
+      if (!this.S) this.resume();
+      else if (this.S.ctx.state !== "running") this.apply();
+    }
   };
 
   /** Vigilante (1 Hz): reanuda un contexto detenido por el navegador y reconstruye uno cerrado. */
@@ -280,8 +309,11 @@ export class HorrorAudio implements GameAudio {
   }
 
   dispose(): void {
+    this.unbindEarlyGestures();
     this.stopWatching();
     this.wantRunning = false;
+    this.bed?.dispose();
+    this.bed = null;
     for (const v of this.voices.values()) v.dispose();
     this.voices.clear();
     this.ambience?.stop(0.1);

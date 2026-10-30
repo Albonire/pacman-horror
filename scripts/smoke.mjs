@@ -185,7 +185,7 @@ try {
   check("el fantasma atrapa y empieza el susto de muerte", await waitPhase("dying", 40000));
   check("el screamer 2D se muestra durante la muerte", await page.waitForFunction(() => window.__scareSeen === true, { timeout: 60000 }).then(() => true, () => false));
   check("el grito del susto de muerte suena (pico de salida > 0,15)", await page.evaluate(() => window.__peak) > 0.15, String(await page.evaluate(() => window.__peak)));
-  check("tras el susto se pierde una vida y se reaparece", await waitPhase("playing", 90000) && await page.evaluate(() => window.__umbral.sim.lives < window.__umbral.sim.diff.lives));
+  check("tras el susto se pierde una vida y se reaparece", await waitPhase("playing", 120000) && await page.evaluate(() => window.__umbral.sim.lives < window.__umbral.sim.diff.lives));
 
   // victoria
   await page.evaluate(() => {

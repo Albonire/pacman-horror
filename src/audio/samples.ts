@@ -9,11 +9,33 @@ export type SampleId = "scream" | "menuLoop";
 const URLS: Record<SampleId, string> = { scream: screamUrl, menuLoop: menuLoopUrl };
 const bytes = new Map<SampleId, Promise<ArrayBuffer | null>>();
 
+function parseDataUri(uri: string): ArrayBuffer | null {
+  try {
+    const idx = uri.indexOf("base64,");
+    if (idx !== -1) {
+      const b64 = uri.slice(idx + 7);
+      const str = atob(b64);
+      const len = str.length;
+      const arr = new Uint8Array(len);
+      for (let i = 0; i < len; i++) arr[i] = str.charCodeAt(i);
+      return arr.buffer;
+    }
+  } catch {
+    /* fallback a fetch si atob falla */
+  }
+  return null;
+}
+
 /** Los bytes se leen una sola vez; cada AudioContext (incluido uno reconstruido) los decodifica por su cuenta. */
 function raw(id: SampleId): Promise<ArrayBuffer | null> {
   let p = bytes.get(id);
   if (!p) {
-    p = fetch(URLS[id]).then((r) => r.arrayBuffer()).catch(() => null);
+    const parsed = parseDataUri(URLS[id]);
+    if (parsed) {
+      p = Promise.resolve(parsed);
+    } else {
+      p = fetch(URLS[id]).then((r) => r.arrayBuffer()).catch(() => null);
+    }
     bytes.set(id, p);
   }
   return p;

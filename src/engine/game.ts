@@ -590,7 +590,7 @@ export class Game {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.frame);
     const raw = Math.max(0, (now - this.last) / 1000);
-    const real = Math.min(0.1, raw);
+    const real = Math.min(this.phase === "dying" || this.phase === "levelclear" || this.phase === "victory" ? 0.25 : 0.1, raw);
     this.last = now;
     this.watchPerformance(raw);
     this.checkSize();
@@ -621,7 +621,7 @@ export class Game {
 
   /** Avanza la simulacion y renderiza un frame. Tambien lo usan las pruebas. */
   advance(realDt: number, renderFrame = true): void {
-    let dt = Math.min(realDt, 0.05);
+    let dt = Math.min(realDt, this.phase === "dying" || this.phase === "levelclear" || this.phase === "victory" ? 0.25 : 0.05);
     if (this.hitStop > 0) { this.hitStop -= dt; dt *= 0.05; }
     this.time += dt;
     sharedUniforms.uTime.value = this.time;
