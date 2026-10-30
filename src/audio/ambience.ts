@@ -190,7 +190,7 @@ export class Ambience {
 
   /** En zonas oscuras el ambiente se apaga: queda el silencio incomodo. */
   setDark(d: number): void {
-    if (this.alive) this.out.gain.setTargetAtTime(1 - 0.55 * d, this.S.now, 0.6);
+    if (this.alive) this.S.ramp(this.out.gain, 1 - 0.55 * d, 0.6);
   }
 
   stop(fade = 1.2): void {

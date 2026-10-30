@@ -130,10 +130,45 @@ try {
   await page.evaluate(() => { const c = window.__umbral.audio.S.ctx; const t = c.currentTime; Object.defineProperty(c, "currentTime", { get: () => t, configurable: true }); });
   check("un reloj de audio parado se detecta y se reconstruye", await page.waitForFunction((b) => window.__umbral.audio.diag().rebuilds > b && window.__umbral.audio.S.ctx.state === "running", { timeout: 40000 }, rebuilds0).then(() => true, () => false), await page.evaluate(() => JSON.stringify(window.__umbral.audio.diag())));
 
+  // autocuracion: una ganancia colapsada se restaura sola, sin reconstruir el contexto
+  const healBase = await page.evaluate(() => { const A = window.__umbral.audio; window.__ctxHeal = A.S.ctx; return A.diag().heals; });
+  await new Promise((r) => setTimeout(r, 2200));
+  await page.evaluate(() => { const S = window.__umbral.audio.S; const t = S.ctx.currentTime; S.master.gain.cancelScheduledValues(t); S.master.gain.setValueAtTime(0.0005, t); S.sfx.gain.cancelScheduledValues(t); S.sfx.gain.setValueAtTime(0, t); });
+  // el valor leido en el hilo principal tarda un instante en reflejar el colapso: primero se espera a verlo
+  await page.waitForFunction(() => window.__umbral.audio.S.master.gain.value < 0.1, { timeout: 3000, polling: 50 }).catch(() => {});
+  const healed = await page.waitForFunction(() => { const S = window.__umbral.audio.S; return S.master.gain.value > 0.5 && S.sfx.gain.value > 1; }, { timeout: 8000, polling: 200 }).then(() => true, () => false);
+  check("una ganancia colapsada (master y sfx) se cura sola en pocos segundos", healed && await page.evaluate((b) => window.__umbral.audio.diag().heals > b, healBase), await page.evaluate(() => JSON.stringify(window.__umbral.audio.diag())));
+  check("la cura no reconstruye el contexto", await page.evaluate(() => window.__umbral.audio.S.ctx === window.__ctxHeal));
+  check("el listener de gestos temprano se desactiva con el contexto en marcha", await page.evaluate(() => window.__umbral.audio.earlyBound === false));
+  check("los sonidos frecuentes quedan pre-renderizados", await page.waitForFunction(() => window.__umbral.audio.diag().baked === 7, { timeout: 20000 }).then(() => true, () => false), String(await page.evaluate(() => window.__umbral.audio.diag().baked)));
+
+  // si el navegador se niega a crear contextos (dos veces), el motor no se queda sin grafo y se recupera solo
+  await page.evaluate(() => {
+    const Orig = window.AudioContext; let n = 0;
+    window.__ctxFailBefore = window.__umbral.audio.S.ctx;
+    window.AudioContext = function (o) { if (n++ < 2) throw new Error("fallo simulado"); window.AudioContext = Orig; return new Orig(o); };
+    window.__ctxFailBefore.close();
+  });
+  const recovered = await page.waitForFunction(() => { const S = window.__umbral.audio.S; return S && S.ctx !== window.__ctxFailBefore && S.ctx.state === "running"; }, { timeout: 40000 }).then(() => true, () => false);
+  check("si falla la creacion del contexto (2 veces) el audio se recupera solo", recovered, await page.evaluate(() => JSON.stringify(window.__umbral.audio.diag())));
+
+  // registro de vuelo: F9 abre el panel con lineas del contexto y se guarda para sobrevivir a una recarga
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "F9" })));
+  const logTxt = await page.evaluate(() => document.querySelector("[data-audio-log] pre")?.textContent ?? "");
+  check("F9 abre el registro de audio con lineas del contexto y los eventos", /Registro de audio/.test(await page.evaluate(() => document.querySelector("[data-audio-log]")?.textContent ?? "")) && /st=running/.test(logTxt) && /reconstruccion fallida/.test(logTxt), logTxt.slice(-300));
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "F9" })));
+  check("F9 vuelve a cerrar el registro", await page.evaluate(() => !document.querySelector("[data-audio-log]")));
+  // abrir el registro libera el puntero y el juego se pausa: se reanuda desde el menu de pausa
+  if (await page.evaluate(() => window.__umbral.phase) === "paused") await clickText("REANUDAR");
+  await waitPhase("playing", 10000);
+  const stored = await page.evaluate(() => { try { return JSON.parse(localStorage.getItem("umbral.audiolog.v1") || "null"); } catch { return null; } });
+  check("el registro se guarda en localStorage", !!stored && stored.lines.length >= 5, stored ? String(stored.lines.length) : "vacio");
+
   // pausa y ajustes
   await page.keyboard.press("Escape");
   check("Escape pausa", await waitPhase("paused", 10000));
   check("el panel de ajustes se abre desde la pausa", await clickText("AJUSTES") && await page.evaluate(() => /sensibilidad/i.test(document.body.innerText)));
+  check("un clic en el menu de pausa no reanuda el audio", await page.evaluate(() => window.__umbral.audio.diag().wantRunning === false));
   await clickText("LISTO");
   check("se puede reanudar", await clickText("REANUDAR") && await waitPhase("playing", 10000));
 

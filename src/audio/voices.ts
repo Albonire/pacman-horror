@@ -1,6 +1,7 @@
 // Voces continuas: la respiracion de Pac-Man y las voces posicionales de cada fantasma.
 
 import type { AudioGhost } from "./types";
+import { ghostStep } from "./baked";
 import type { Synth } from "./synth";
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -122,10 +123,7 @@ export class GhostVoice {
     this.stepT -= dt;
     if (this.stepT <= 0) {
       this.stepT = lerp(1.15, 0.5, prox) * (0.9 + rnd() * 0.25);
-      S.noise({ kind: "brown", lp: 520, hp: 40, dur: 0.16, a: 0.004, vol: 0.5 * vol, dest, send: 0.12 });
-      S.tone({ f0: 70, f1: 38, dur: 0.14, a: 0.003, vol: 0.34 * vol, lp: 220, dest });
-      // arrastre humedo entre paso y paso
-      S.noise({ kind: "pink", bp: 900, bp1: 350, q: 1.4, dur: 0.22, a: 0.05, vol: 0.12 * vol, t: S.now + 0.12, dest, send: 0.18 });
+      ghostStep(S, vol, dest);
     }
 
     // estertor lento cuando esta a unos 10 u o menos

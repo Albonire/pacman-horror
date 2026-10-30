@@ -1,20 +1,17 @@
 // Efectos de un solo disparo (todos sinteticos). Cada funcion recibe el Synth y parametros ligeros.
 
+import * as baked from "./baked";
 import type { Synth } from "./synth";
 import type { FaceKind } from "../gfx/faces";
 
 const rnd = Math.random;
 
-/** "Waka waka" corrupto: dos notas alternas retro + crujido humedo de masticar. */
+/** "Waka waka" corrupto: dos notas alternas retro + crujido humedo de masticar (pre-renderizado, ver baked.ts). */
 export function waka(S: Synth, streak: number): void {
   const up = streak % 2 === 0;
   const creep = Math.min(1, streak / 24); // cuanto mas comes, mas se desafina
-  const f0 = up ? 250 : 470, f1 = up ? 470 : 250;
-  S.tone({ type: "square", f0, f1, dur: 0.085, vol: 0.2, lp: 1700, a: 0.003, detune: (rnd() - 0.5) * 70 * creep });
-  S.noise({ bp: 1600 + rnd() * 700, q: 1.3, dur: 0.07, vol: 0.3, a: 0.002, send: 0.1 });
-  S.noise({ kind: "brown", lp: 420, dur: 0.1, vol: 0.55, a: 0.003 });
-  S.tone({ f0: 112, f1: 58, dur: 0.1, vol: 0.4 });
-  if (streak > 9 && rnd() < 0.25) S.tone({ type: "sawtooth", f0: f0 * 0.5, f1: f1 * 0.5, dur: 0.22, vol: 0.09, lp: 600, send: 0.45 });
+  baked.waka(S, up, creep);
+  if (streak > 9 && rnd() < 0.25) S.tone({ type: "sawtooth", f0: (up ? 250 : 470) * 0.5, f1: (up ? 470 : 250) * 0.5, dur: 0.22, vol: 0.09, lp: 600, send: 0.45 });
 }
 
 export function pellet(S: Synth): void {
@@ -48,10 +45,7 @@ export function fruitEaten(S: Synth): void {
 }
 
 export function step(S: Synth, running: boolean): void {
-  const v = running ? 0.5 : 0.33;
-  S.noise({ kind: "brown", lp: 380, dur: 0.1, vol: v, a: 0.004 });
-  S.tone({ f0: 88, f1: 52, dur: 0.09, vol: v * 0.9 });
-  if (running || rnd() < 0.3) S.noise({ bp: 1300, q: 0.9, dur: 0.045, vol: v * 0.3, send: 0.1 });
+  baked.step(S, running);
 }
 
 export function bite(S: Synth): void {
@@ -158,7 +152,8 @@ export function deathScream(S: Synth, kind: FaceKind, gain = 1): void {
     { f0: 340, f1: 1600, formants: [[680, 2.4, 1.4], [1600, 3.0, 1.2], [2900, 3.8, 1.0], [4000, 4.5, 0.7]] as [number, number, number][], growl: true },
   ][kind % 4];
   const t0 = S.now;
-  const hit = t0 + 0.38;
+  // el golpe se adelanta la latencia de salida (con latencyHint "playback" es mayor) para que siga coincidiendo con el destello
+  const hit = t0 + 0.38 - S.lead;
   const dur = 1.55;
 
   // 1) aspiracion previa: el aire que entra justo antes del grito (sube y se corta en seco)
@@ -231,9 +226,7 @@ export function beacon(S: Synth, x: number, y: number, z: number): void {
 
 /** Jadeo al quedarse sin aliento dentro del armario: una bocanada brusca y un golpe sordo de la caja. */
 export function gasp(S: Synth): void {
-  S.noise({ kind: "pink", bp: 500, bp1: 1500, q: 1.6, dur: 0.42, a: 0.03, vol: 0.55 });
-  S.noise({ kind: "pink", bp: 1200, bp1: 600, q: 2, dur: 0.3, a: 0.02, t: S.now + 0.18, vol: 0.3 });
-  S.tone({ f0: 90, f1: 40, dur: 0.18, vol: 0.5, lp: 220, a: 0.004 });
+  baked.gasp(S);
 }
 
 /** Golpe de susto sincronizado con cada destello de la cara: acorde disonante, aire y sub-grave. */
@@ -332,9 +325,7 @@ export function screamerFlash(S: Synth): void {
 }
 
 export function heartbeat(S: Synth, strength: number): void {
-  const s = 0.3 + 0.7 * Math.max(0, Math.min(1, strength));
-  S.tone({ f0: 58, f1: 38, dur: 0.17, vol: 0.4 * s, lp: 180, a: 0.012, dest: S.voice });
-  S.tone({ f0: 50, f1: 34, dur: 0.2, vol: 0.28 * s, lp: 160, a: 0.012, t: S.now + 0.19, dest: S.voice });
+  baked.heartbeat(S, 0.3 + 0.7 * Math.max(0, Math.min(1, strength)));
 }
 
 /** Pila recogida: clic metalico y un acorde corto y limpio (lo unico "bueno" que suena). */
