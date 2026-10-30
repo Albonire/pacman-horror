@@ -16,18 +16,18 @@ Casi todo es procedural: texturas, modelos, música, respiraciones y la mayor pa
 | Girar con teclado | `Q` (en modo "solo teclado" también `E`, `←` `→`, y `R` `V` para inclinar) |
 | Mirar por encima del hombro (sin desviar el paso) | `Z` |
 | Correr | `Shift` (gasta aliento; los fantasmas oyen los pasos rápidos) |
-| Ecolocalización (mapa y entidades) | `Espacio` o clic derecho, mantener; frena el paso |
+| Ecolocalización (mapa y entidades) | `Espacio` o clic derecho, mantener; frena el paso. Dentro de un armario, `Espacio` contiene el aliento |
 | Linterna "Resplandor" | `F` (gasta batería; congela al Estático) |
 | Cámara 1ª / 3ª persona | `C` |
 | Morder (aturde al fantasma de enfrente, gasta aliento) | `X` o clic izquierdo |
 | Silenciar | `M` |
 | Pausa | `Esc` o `P` |
 
-Si el navegador no concede el control del ratón, el juego cambia solo al modo teclado. Está pensado para ordenador (teclado y ratón); no hay controles táctiles.
+El primer clic o toque dentro del juego pide pantalla completa (se puede desactivar en Ajustes). Si el navegador no concede el control del ratón, el juego cambia solo al modo teclado. Está pensado para ordenador (teclado y ratón); no hay controles táctiles.
 
 El campo de visión de Ajustes es horizontal (por defecto 90 grados).
 
-Si el equipo no sostiene unos 26 fps durante unos segundos de partida, el juego baja un escalón la calidad gráfica y lo avisa en pantalla.
+Rendimiento: la calidad baja renderiza al 70 % de la resolución, sin MSAA, con 2 luces de pasillo y materiales sencillos. Además, la resolución dinámica (Ajustes) baja sola la nitidez de render cuando el equipo no sostiene unos 38 fps y la sube de nuevo cuando sobra margen; si en el mínimo sigue lento, baja un escalón de calidad y lo avisa.
 
 ### Reglas
 
@@ -38,7 +38,9 @@ Si el equipo no sostiene unos 26 fps durante unos segundos de partida, el juego 
 - El mordisco (`X`) aturde unos 1,7 s al fantasma que tienes delante (a menos de ~2 u, con línea de visión): no se mueve ni mata. Cuesta aliento y tarda 4,5 s en recargarse. Si el fantasma está asustado, se lo come.
 - Los fantasmas cercanos con línea de visión se abalanzan en línea recta: pegarse a una esquina de la celda no sirve de escondite.
 - Hay zonas oscuras (2 a 4 por nivel) sin luminarias: solo te queda la linterna. Las pilas del suelo la recargan (+45 %). Las cajas de fusibles de su borde (`E`) encienden la zona 14 s, pero el chasquido se oye por el sector y alerta a los fantasmas cercanos.
-- Los armarios (`E`) sirven de escondite: dentro no ves bien ni tienes linterna. Si ningún fantasma te vio entrar, pierden el rastro; los que se detienen junto al armario tienen un 50 % de descubrirte tras 2 s.
+- Los armarios (`E`) sirven de escondite. Dentro ves el mundo a través de los listones de la puerta y no tienes linterna. Cada fantasma acumula sospecha sobre el armario mientras ve su puerta de cerca: más rápido cuanto más cerca, con luz y si te vio (0,7) o te oyó (0,4) entrar. A 1 abre la puerta. Mantén `Espacio` para contener el aliento: la sospecha sube un 65 % más despacio, pero gasta aliento y, si se acaba, jadeas, el jadeo se oye y los fantasmas cercanos vienen a mirar. Los fantasmas que te pierden cerca de un armario lo revisan.
+- Al abrirse la salida aparece una flecha tenue arriba del centro y un pulso grave suena desde su dirección (se apagan al estar a menos de 6 celdas).
+- Si te atrapan, reapareces en la celda segura más cercana al lugar de la muerte (a 8 celdas o más de las guaridas y fuera de zonas oscuras) con la linterna al 60 % como mínimo.
 - Un fantasma peligroso cerca hace titilar tu linterna y las luces del pasillo, salvo que se acerque en silencio.
 - Los mapas están más oscuros: hay menos luz de relleno, más luminarias muertas y más niebla. La linterna se atenúa sola cerca de las paredes para no quemar la imagen.
 - Al morir, el fantasma te muestra su cara, el grito dura unos cinco segundos y la pantalla se va oscureciendo mientras se cierran los párpados, hasta quedar en negro. No hay destellos blancos.
@@ -89,9 +91,9 @@ Niveles completados por un bot evasivo (6 partidas con semilla fija por celda). 
 
 | Modo | Nivel 1 | Nivel 2 | Nivel 3 | Nivel 4 | Nivel 5 | Nivel 6 |
 | --- | --- | --- | --- | --- | --- | --- |
-| Aprendiz | 6/6 | 4/6 | 5/6 | 3/6 | 5/6 | 1/6 |
-| Normal | 6/6 | 2/6 | 1/6 | 0/6 | 0/6 | 0/6 |
-| Pesadilla | 2/6 | 0/6 | 0/6 | 0/6 | 0/6 | 0/6 |
+| Aprendiz | 5/6 | 5/6 | 5/6 | 2/6 | 3/6 | 5/6 |
+| Normal | 5/6 | 3/6 | 0/6 | 2/6 | 0/6 | 0/6 |
+| Pesadilla | 3/6 | 0/6 | 0/6 | 0/6 | 0/6 | 0/6 |
 | Muerte súbita | 0/6 | 0/6 | 0/6 | 0/6 | 0/6 | 0/6 |
 
 Se reproduce con `BALANCE=1 npx vitest run src/sim/balance.test.ts`.
@@ -125,3 +127,5 @@ npm run smoke      # prueba E2E sobre dist/ (requiere `npm run build` y Chromium
 python3 scripts/prepare_assets.py   # regenera src/assets/ (grito, bucle del menú, caras) desde assets/
 AUDIT=1 npx vitest run src/sim/ghostaudit.test.ts   # tabla de la IA de cada fantasma
 ```
+
+Con `?debug` en la URL el motor se expone como `window.__umbral`: `__umbral.audio.diag()` (estado del contexto de audio, reloj y reconstrucciones) y `__umbral.perfStats()` (percentiles de tiempo de frame y escala de resolución).
