@@ -19,6 +19,7 @@ import type { FaceKind } from "../gfx/faces";
 import type { SimEvent } from "../sim/events";
 import { rayDistance } from "../sim/collision";
 import { BITE_COOLDOWN, Simulation } from "../sim/simulation";
+import "./lightFix";
 import { ScareDirector } from "./director";
 import { disposeFaceCache, GhostView } from "./ghostView";
 import { Input } from "./input";
@@ -1142,10 +1143,15 @@ export class Game {
     }
     // autoexposicion: la ley del inverso del cuadrado quema las paredes cercanas, asi que
     // se atenua el haz segun la distancia al muro que tiene delante
-    const [lfx, lfz] = p.forwardVec();
-    const wallD = rayDistance(sim.maze, p.x, p.z, lfx, lfz, 6);
+    // varios rayos a lo ancho del haz y segun la mirada (no el cuerpo): una pared lateral
+    // pegada a la camara tambien entra en el cono y es la que se quema
+    let wallD = 6;
+    for (const off of [-0.5, -0.25, 0, 0.25, 0.5]) {
+      const a = p.viewYaw + off;
+      wallD = Math.min(wallD, rayDistance(sim.maze, p.x, p.z, -Math.sin(a), -Math.cos(a), 6));
+    }
     this.headDist += (wallD - this.headDist) * Math.min(1, dt * 8);
-    inten *= clamp(Math.pow(this.headDist / 4.5, 2), 0.1, 1);
+    inten *= clamp(Math.pow(this.headDist / 4.5, 1.5), 0.18, 1);
     head.intensity = p.lightOn && this.phase !== "dying" ? inten : 0;
     this.glow.position.set(origin.x, K.EYE_H + 0.1, origin.z);
     this.glow.intensity = sim.powered ? 10 + Math.sin(this.time * 12) * 3 : 1.8;

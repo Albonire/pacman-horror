@@ -208,11 +208,31 @@ const STOMACH: ThemeVisual = {
   textures: () => ({ wall: stomachWall(), floor: stomachFloor(), ceiling: stomachCeiling() }),
 };
 
+/**
+ * Oscurecimiento global de los mapas: menos luz de relleno (los pasillos dependen de la linterna y de las
+ * pocas luminarias vivas), mas luminarias muertas o rotas y mas niebla. Los valores de cada tema de arriba
+ * son el punto de partida; aqui se aplica el mismo factor a todos para que la progresion entre niveles se conserve.
+ */
+export const DARKEN = { fill: 0.5, fixture: 0.78, fog: 1.18, dead: 1.7, broken: 1.3, exposure: 0.92 };
+
+function darker(t: ThemeVisual): ThemeVisual {
+  return {
+    ...t,
+    hemiIntensity: t.hemiIntensity * DARKEN.fill,
+    ambientIntensity: t.ambientIntensity * DARKEN.fill,
+    fixtureIntensity: t.fixtureIntensity * DARKEN.fixture,
+    fogDensity: t.fogDensity * DARKEN.fog,
+    deadChance: Math.min(0.5, t.deadChance * DARKEN.dead),
+    brokenChance: t.brokenChance === 0 ? 0 : Math.min(0.55, t.brokenChance * DARKEN.broken),
+    exposure: t.exposure * DARKEN.exposure,
+  };
+}
+
 export const THEMES: Record<ThemeId, ThemeVisual> = {
-  offices: OFFICES,
-  pool: POOL,
-  arcade: ARCADE,
-  boiler: BOILER,
-  ward: WARD,
-  stomach: STOMACH,
+  offices: darker(OFFICES),
+  pool: darker(POOL),
+  arcade: darker(ARCADE),
+  boiler: darker(BOILER),
+  ward: darker(WARD),
+  stomach: darker(STOMACH),
 };

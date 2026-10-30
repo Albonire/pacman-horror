@@ -6,7 +6,7 @@ export const WALL_H = 3.4; // altura de paredes
 export const EYE_H = 0.82; // altura de los ojos de Pac-Man (es bajito: todo se ve enorme)
 
 // ---------------- Jugador ----------------
-export const PLAYER_RADIUS = 0.34;
+export const PLAYER_RADIUS = 0.46; // holgura: con menos la camara queda pegada al muro y la textura se amplia a un borron
 export const PLAYER_WALK = 3.7; // u/s
 export const PLAYER_RUN = 5.8; // u/s
 export const PLAYER_ACCEL = 26; // u/s^2
