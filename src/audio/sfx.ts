@@ -219,6 +219,13 @@ export function deathScream(S: Synth, kind: FaceKind, gain = 1): void {
   beats.forEach((d, i) => S.tone({ f0: 54 - i * 3, f1: 30, t: tTail + d, dur: 0.22 + i * 0.03, vol: (0.62 - i * 0.1) * g, lp: 170, a: 0.01 }));
 }
 
+/** Jadeo al quedarse sin aliento dentro del armario: una bocanada brusca y un golpe sordo de la caja. */
+export function gasp(S: Synth): void {
+  S.noise({ kind: "pink", bp: 500, bp1: 1500, q: 1.6, dur: 0.42, a: 0.03, vol: 0.55 });
+  S.noise({ kind: "pink", bp: 1200, bp1: 600, q: 2, dur: 0.3, a: 0.02, t: S.now + 0.18, vol: 0.3 });
+  S.tone({ f0: 90, f1: 40, dur: 0.18, vol: 0.5, lp: 220, a: 0.004 });
+}
+
 /** Golpe de susto sincronizado con cada destello de la cara: acorde disonante, aire y sub-grave. */
 export function scareHit(S: Synth, strength: number): void {
   const s = Math.max(0.4, Math.min(1.5, strength));

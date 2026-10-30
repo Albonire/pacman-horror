@@ -292,7 +292,7 @@ export class HorrorAudio implements GameAudio {
       this.dread?.update({ dt: f.dt, tension: f.tension, chasing: f.chasing, intensity: f.dread * (1 + f.darkness * 1.2), listener: { x: f.listener.x, z: f.listener.z, fx: f.listener.fx, fz: f.listener.fz } });
       this.breath.update(S, f.dt, {
         exertion: f.exertion, tension: f.tension, running: f.running, exhausted: f.exhausted,
-        hidden: f.hidden, hiddenNearGhost: f.hiddenNearGhost,
+        hidden: f.hidden, hiddenNearGhost: f.hiddenNearGhost, holding: f.holding,
       });
     }
     for (const g of f.ghosts) {
@@ -349,6 +349,7 @@ export class HorrorAudio implements GameAudio {
   playPickup(): void { this.with((S) => fx.pickup(S), MIX.pickup); }
   playSwitch(): void { this.with((S) => fx.switchOn(S), MIX.switchOn); }
   playHide(inside: boolean): void { this.with((S) => fx.hide(S, inside), MIX.hide); }
+  playGasp(): void { this.with((S) => fx.gasp(S), MIX.hide); }
   playHeartbeat(strength: number): void { this.with((S) => fx.heartbeat(S, strength), MIX.heartbeat); }
   playScareHit(strength: number): void { this.with((S) => fx.scareHit(S, strength), MIX.scareHit); }
   playDread(kind: string): void {

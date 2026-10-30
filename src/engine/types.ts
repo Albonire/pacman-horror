@@ -47,6 +47,10 @@ export interface HudState {
   camera: "fp" | "tp";
   /** El jugador esta dentro de un escondite (primera persona forzada). */
   hidden: boolean;
+  /** Contiene la respiracion dentro del armario. */
+  holding: boolean;
+  /** 0..1: sospecha mas alta de un fantasma sobre el armario (solo para el pulso visual, sin cifra). */
+  hideThreat: number;
   /** Retícula de mira: solo en primera persona y fuera del escondite. */
   crosshair: boolean;
   sonar: boolean;

@@ -758,7 +758,7 @@ export class Game {
     this.pitchVel += ((this.rig.pitch - pitch0) / Math.max(dt, 1e-3) - this.pitchVel) * Math.min(1, dt * 12);
 
     const ih = sim.interactHint;
-    const interactHint = ih === "hide" ? "E: esconderte" : ih === "switch" ? "E: encender la luz (hace ruido)" : ih === "leave" ? "E: salir del escondite" : null;
+    const interactHint = ih === "hide" ? "E: esconderte" : ih === "switch" ? "E: encender la luz (hace ruido)" : ih === "leave" ? null : null; // dentro del armario la ayuda va en la etiqueta inferior, no en el centro
     if (this.input.needsLock && !this.input.locked) {
       this.lockHintT += dt;
       if (interactHint) this.hud.showHint(interactHint);
@@ -772,14 +772,27 @@ export class Game {
       const base = Math.atan2(sim.hidden.wall[0], sim.hidden.wall[1]);
       let rel = p.yaw - base;
       rel = Math.atan2(Math.sin(rel), Math.cos(rel));
-      p.yaw = base + clamp(rel, -0.95, 0.95);
-      this.rig.pitch = clamp(this.rig.pitch, -0.45, 0.45);
+      p.yaw = base + clamp(rel, -0.62, 0.62);
+      this.rig.pitch = clamp(this.rig.pitch, -0.4, 0.4);
     }
     sim.update(dt, { forward: axes.forward, strafe: axes.strafe, sprint: this.input.sprint, sonar: this.input.sonar, bite: this.biteReq, interact: this.interactReq, lookBack: this.input.lookBack });
     this.biteReq = false; this.interactReq = false;
     this.levelTime += dt;
     if (this.run) this.run.totalTime += dt;
 
+    // dentro del armario: motas de polvo lentas en los haces que se cuelan por los listones
+    if (sim.hidden) {
+      this.dustTimer += dt;
+      if (this.dustTimer > 0.18) {
+        this.dustTimer = 0;
+        const fwd = this.rig.forward;
+        const d = 0.25 + Math.random() * 0.5;
+        this.particles.emit(
+          this.rig.position.x + fwd.x * d + (Math.random() - 0.5) * 0.3, this.rig.position.y + (Math.random() - 0.5) * 0.35, this.rig.position.z + fwd.z * d + (Math.random() - 0.5) * 0.3,
+          (Math.random() - 0.5) * 0.02, 0.008 + Math.random() * 0.01, (Math.random() - 0.5) * 0.02, 3 + Math.random() * 3, 0.012 + Math.random() * 0.012, 0xffe3b0, 0, 0.98,
+        );
+      }
+    }
     // motas de polvo flotando en el haz de la linterna
     if (p.lightOn && this.rig.mode === "fp" && !sim.hidden) {
       this.dustTimer += dt;
@@ -851,6 +864,8 @@ export class Game {
           if (Math.hypot(g.x - sim.player.x, g.z - sim.player.z) < 18 && sim.maze.rayClear(sim.player.x, sim.player.z, g.x, g.z)) { t = Math.min(1, t + 0.3); break; }
         }
       }
+      // dentro del armario el corazon sigue a la sospecha, no a la distancia
+      if (sim.hidden) t = Math.max(t * 0.6, sim.hideThreat * 0.95);
       if (sim.powered) t *= 0.35;
       this.tensionTarget = t;
     }
@@ -973,6 +988,11 @@ export class Game {
           this.audio.playSwitch();
           this.rig.addTrauma(0.2);
           this.hud.message(e.alerted > 0 ? "La luz vuelve... y algo te oyó" : "La luz vuelve unos segundos", 2.4, e.alerted > 0 ? "warn" : "info");
+          break;
+        case "gasp":
+          this.audio.playGasp();
+          this.rig.addTrauma(0.25);
+          this.hud.message("Te falta el aire", 1.6, "warn");
           break;
         case "hide":
           this.audio.playHide(e.inside);
@@ -1179,6 +1199,7 @@ export class Game {
     const p = sim.player;
     const exertion = clamp(1 - p.stamina / K.STAMINA_MAX, 0, 1) * (p.running || p.exhausted ? 1 : 0.5);
     this.rig.forceFp = !!sim.hidden;
+    if (sim.hidden && sim.hideThreat > 0.5) this.rig.trauma = Math.max(this.rig.trauma, (sim.hideThreat - 0.5) * 0.3); // tiemblas
     if (this.phase === "playing" || this.phase === "paused" || this.phase === "levelclear") {
       this.rig.update(dt, p, sim.maze, { exertion, tension: this.tension, frozen: false });
     } else {
@@ -1284,6 +1305,8 @@ export class Game {
       powerLow: sim.powered && sim.frightTimer < 2.2,
       camera: this.rig.mode,
       hidden: !!sim.hidden,
+      holding: sim.holdingBreath,
+      hideThreat: sim.hideThreat,
       crosshair: this.rig.mode === "fp" && !sim.hidden,
       sonar: p.sonarOpen,
       exitOpen: sim.exitUnlocked,
@@ -1315,6 +1338,7 @@ export class Game {
       darkness: this.darkness,
       hidden: !!sim.hidden,
       hiddenNearGhost: nearGhost,
+      holding: sim.holdingBreath,
       dead: this.phase === "dying",
       dread: (this.settings.scares === "full" ? 1 : this.settings.scares === "reduced" ? 0.6 : 0.35) * (this.run ? DIFFICULTIES[this.run.diff].ambientScares : 1),
       ghosts: sim.ghosts.map((g) => ({

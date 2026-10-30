@@ -82,6 +82,9 @@ export class HudController implements HudApi {
     });
     this.set("crosshair", "crosshair", s.crosshair ? "1" : "0", (v) => { e.crosshair.style.opacity = v; });
     this.set("hide", "hide", s.hidden ? "1" : "0", (v) => { e.hide.style.opacity = v; });
+    this.set("holding", "hide", s.holding ? "1" : "0", (v) => { e.hide.dataset.holding = v; });
+    // el miedo sube a saltos de 0,05 para no tocar el DOM en cada frame
+    this.set("threat", "hide", (Math.round(s.hideThreat * 20) / 20).toFixed(2), (v) => { e.hide.style.setProperty("--threat", v); });
     this.set("mute", "mute", String(s.muted), (v) => { e.mute.style.opacity = v === "true" ? "1" : "0"; });
   }
 

@@ -25,4 +25,6 @@ export type SimEvent =
   | { type: "bite"; stunned: number; eaten: number }
   | { type: "battery"; x: number; z: number }
   | { type: "switch"; zone: number; alerted: number }
-  | { type: "hide"; inside: boolean; seen: boolean };
+  | { type: "hide"; inside: boolean; seen: boolean }
+  | { type: "gasp" }
+  | { type: "hideCheck"; ghost: GhostKind };
