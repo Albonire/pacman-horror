@@ -112,7 +112,7 @@ src/ui       pantallas y HUD en React
 ## Límites conocidos de la verificación
 
 - El render se ha comprobado con capturas en Chromium sin GPU (SwiftShader). No se ha medido el rendimiento en una GPU real; la opción "Calidad gráfica" (alta, media, baja) reduce sombras, bloom y resolución.
-- El audio se verificó con renderizado offline y análisis espectral (niveles y posición estéreo), no escuchándolo en altavoces.
+- El audio se verificó con renderizado offline y análisis espectral (niveles y posición estéreo), no escuchándolo en altavoces ni en el equipo de quien reportó los cortes de sonido. Ese corte no se pudo reproducir en el entorno de pruebas: se endureció el motor (ver "Sonido que se corta") y se añadió un registro de vuelo para identificar la causa si persiste.
 - La calibración de dificultad usa un bot, no jugadores humanos: los números de la tabla son una referencia relativa, no una promesa de lo que sentirá cada persona.
 
 ## Desarrollo
@@ -127,5 +127,11 @@ npm run smoke      # prueba E2E sobre dist/ (requiere `npm run build` y Chromium
 python3 scripts/prepare_assets.py   # regenera src/assets/ (grito, bucle del menú, caras) desde assets/
 AUDIT=1 npx vitest run src/sim/ghostaudit.test.ts   # tabla de la IA de cada fantasma
 ```
+
+### Sonido que se corta
+
+El motor de audio se vigila a sí mismo cada segundo: reanuda el contexto si el navegador lo detiene, reconstruye el grafo si el reloj de audio no avanza, el contexto se cierra o la salida queda muda o con NaN, y restaura cualquier ganancia que se salga de su valor (`Synth.heal`). Si el navegador se niega a crear un contexto nuevo, reintenta cada segundo sin dejar el motor sin grafo. Para reducir la carga del hilo de audio, las capas continuas actualizan sus parámetros a 10 Hz y solo si cambian más de un 2 %, y los sonidos más frecuentes (pasos, waka, latido, jadeo, paso de fantasma) se pre-renderizan una vez con `OfflineAudioContext` y se reproducen con dos nodos.
+
+Si el sonido vuelve a fallar, pulsa **F9** en el juego: abre el registro de vuelo del audio (una línea por segundo con el estado del contexto, latencias, ganancias, nodos y llamadas a parámetros por segundo, tareas largas del hilo principal y los eventos de pausa, visibilidad, pantalla completa, cambios de dispositivo y reconstrucciones). El registro se guarda en el navegador y sobrevive a la recarga: tras recargar, F9 muestra también el de la sesión anterior, con un botón "Copiar" para pegarlo en un informe.
 
 Con `?debug` en la URL el motor se expone como `window.__umbral`: `__umbral.audio.diag()` (estado del contexto de audio, reloj y reconstrucciones) y `__umbral.perfStats()` (percentiles de tiempo de frame y escala de resolución).

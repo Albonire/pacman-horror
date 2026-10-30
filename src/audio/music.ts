@@ -37,13 +37,18 @@ export class Drone {
     this.lfo.start();
   }
 
+  private lastT = -1;
+
+  /** Maximo 10 Hz y solo si el objetivo cambia mas de ~2 % (ver `Synth.ramp`): antes eran 5 llamadas a parametros por frame. */
   update(tension: number): void {
-    const t = this.S.now;
-    this.gain.gain.setTargetAtTime(0.05 + tension * 0.2, t, 0.5);
-    this.lfoGain.gain.setTargetAtTime(tension * 95, t, 0.4);
-    this.lfo.frequency.setTargetAtTime(0.2 + tension * 2.3, t, 0.4);
-    this.filter.frequency.setTargetAtTime(600 + tension * 1500, t, 0.5);
-    this.tritoneGain.gain.setTargetAtTime(tension > 0.55 ? 0.15 : 0, t, 0.5);
+    const S = this.S, t = S.now;
+    if (t - this.lastT < 0.1) return;
+    this.lastT = t;
+    S.ramp(this.gain.gain, 0.05 + tension * 0.2, 0.5);
+    S.ramp(this.lfoGain.gain, tension * 95, 0.4);
+    S.ramp(this.lfo.frequency, 0.2 + tension * 2.3, 0.4);
+    S.ramp(this.filter.frequency, 600 + tension * 1500, 0.5);
+    S.ramp(this.tritoneGain.gain, tension > 0.55 ? 0.15 : 0, 0.5);
   }
 
   dispose(): void {
@@ -81,26 +86,30 @@ export class Siren {
     this.osc.start(); this.osc2.start(); this.lfo.start();
   }
 
+  private lastT = -1;
+
   update(dt: number, s: { progress: number; chasing: boolean; tension: number; powered: boolean; powerLow: boolean }): void {
-    const t = this.S.now;
+    const S = this.S, t = S.now;
     if (s.powered) {
-      this.osc.frequency.setTargetAtTime(310, t, 0.1);
-      this.osc2.frequency.setTargetAtTime(310, t, 0.1);
-      this.lfo.frequency.setTargetAtTime(7.5, t, 0.1);
-      this.lfoGain.gain.setTargetAtTime(95, t, 0.1);
-      this.filter.frequency.setTargetAtTime(1100, t, 0.1);
+      S.ramp(this.osc.frequency, 310, 0.1);
+      S.ramp(this.osc2.frequency, 310, 0.1);
+      S.ramp(this.lfo.frequency, 7.5, 0.1);
+      S.ramp(this.lfoGain.gain, 95, 0.1);
+      S.ramp(this.filter.frequency, 1100, 0.1);
       this.blinkT += dt;
       const blink = s.powerLow && Math.sin(this.blinkT * 22) > 0 ? 0.3 : 1;
-      this.gain.gain.setTargetAtTime(0.06 * blink, t, 0.04);
+      S.ramp(this.gain.gain, 0.06 * blink, 0.04);
       return;
     }
+    if (t - this.lastT < 0.1) return;
+    this.lastT = t;
     const base = 92 + 95 * clamp(s.progress, 0, 1);
-    this.osc.frequency.setTargetAtTime(base, t, 0.2);
-    this.osc2.frequency.setTargetAtTime(base, t, 0.2);
-    this.lfo.frequency.setTargetAtTime(0.75 + s.progress * 1.1 + s.tension * 0.8, t, 0.3);
-    this.lfoGain.gain.setTargetAtTime(base * 0.2, t, 0.3);
-    this.filter.frequency.setTargetAtTime(480 + s.tension * 520, t, 0.3);
-    this.gain.gain.setTargetAtTime(s.chasing ? 0.03 + s.tension * 0.04 : 0, t, 0.6);
+    S.ramp(this.osc.frequency, base, 0.2);
+    S.ramp(this.osc2.frequency, base, 0.2);
+    S.ramp(this.lfo.frequency, 0.75 + s.progress * 1.1 + s.tension * 0.8, 0.3);
+    S.ramp(this.lfoGain.gain, base * 0.2, 0.3);
+    S.ramp(this.filter.frequency, 480 + s.tension * 520, 0.3);
+    S.ramp(this.gain.gain, s.chasing ? 0.03 + s.tension * 0.04 : 0, 0.6);
   }
 
   dispose(): void {

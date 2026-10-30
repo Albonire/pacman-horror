@@ -6,6 +6,8 @@ import { Ambience, THEME_AUDIO } from "./ambience";
 import { Dread, type DreadKind } from "./dread";
 import { MenuBed } from "./menubed";
 import { Drone, Siren } from "./music";
+import { bakeAll, bakedReady } from "./baked";
+import { recorder } from "./recorder";
 import * as fx from "./sfx";
 import { Synth } from "./synth";
 import type { AudioFrame, GameAudio } from "./types";
@@ -19,6 +21,9 @@ const MIX = {
   waka: 0.4, step: 0.6, bite: 0.26, ghostEaten: 0.32, pellet: 0.5, heartbeat: 0.75, scream: 0.8,
   screamerFlash: 0.6, scareHit: 0.75, pickup: 0.5, switchOn: 0.6, hide: 0.7, dread: 0.6, flashlight: 0.6, fruit: 0.5, wake: 0.6, pant: 1.1,
 } as const;
+
+/** Pico de salida por debajo del cual se considera silencio (-80 dB). */
+const QUIET_PEAK = 1e-4;
 
 export class HorrorAudio implements GameAudio {
   private S: Synth | null = null;
@@ -39,7 +44,6 @@ export class HorrorAudio implements GameAudio {
   private chain: Promise<void> = Promise.resolve();
   private watchdog: number | null = null;
   private meterTimer: number | null = null;
-  private silentFor = 0;
   private lastRebuild = -100;
   private pending: { fn: (S: Synth) => void; mix: number; t: number }[] = [];
   private buf: Float32Array<ArrayBuffer> | null = null;
@@ -53,10 +57,22 @@ export class HorrorAudio implements GameAudio {
   private stalledFor = 0;
   private rebuilds = 0;
   private lastReason = "";
+  private clockRatio = 1;
+  private everRan = false;
+  private notRunningFor = 0;
+  private lastFail = -100;
+  private quietFor = 0;
+  private lastDead = -100;
+  private heals = 0;
+  private lastTick = { wall: 0, made: 0, params: 0 };
+  private bakesQueued = false;
+  private quietHealed = false;
+  private quietRebuilds = 0;
 
   /** `factory` y `assumeRunning` permiten pruebas con un OfflineAudioContext. */
   constructor(private factory?: () => AudioContext, private assumeRunning = false) {
     if (!this.assumeRunning && typeof window !== "undefined") {
+      recorder.install();
       this.bindEarlyGestures();
     }
   }
@@ -77,27 +93,47 @@ export class HorrorAudio implements GameAudio {
     }
   }
 
+  /**
+   * Primer gesto: crea el contexto. Despues solo reintenta reanudarlo mientras no este en marcha; no se quita
+   * aqui porque `resume()` es asincrono, sino en el evento `statechange` a `running` (ver `watchState`).
+   * Nunca anula una pausa: si el juego suspendio el audio, un clic en el menu de pausa no lo vuelve a encender.
+   */
   private onEarlyGesture = (): void => {
-    this.resume();
+    if (!this.S) this.resume();
+    else this.kick();
   };
 
   /** Debe llamarse desde un gesto del usuario (clic/tecla). */
   resume(): void {
-    if (!this.S) {
-      try { this.S = new Synth(this.factory?.()); } catch { return; }
-      this.S.setVolume(this.volume);
-      this.S.setMuted(this.muted);
-      this.startLayers();
-      this.watchState();
-      this.startWatching();
-    }
+    if (this.suspended || !this.wantRunning) recorder.event("audio reanudado");
     this.suspended = false;
     this.wantRunning = true;
+    this.startWatching();
+    if (!this.S) {
+      let next: Synth;
+      try { next = new Synth(this.factory?.()); } catch (e) {
+        // el vigilante lo reintenta cada segundo (wantRunning ya esta activo)
+        recorder.event(`no se pudo crear el contexto: ${String((e as Error)?.message ?? e)}`);
+        return;
+      }
+      recorder.event(`contexto creado (${next.ctx.sampleRate} Hz, latencia base ${(next.ctx.baseLatency ?? 0).toFixed(3)} s)`);
+      this.adopt(next);
+    }
     this.apply();
-    if (this.S?.ctx.state === "running") this.unbindEarlyGestures();
+  }
+
+  /** Pone en marcha un Synth nuevo con el volumen, silencio y tema actuales. */
+  private adopt(next: Synth): void {
+    this.S = next;
+    next.setVolume(this.volume);
+    next.setMuted(this.muted);
+    this.startLayers();
+    this.watchState();
+    this.bakesQueued = false;
   }
 
   suspend(): void {
+    if (!this.suspended) recorder.event("audio en pausa");
     this.suspended = true;
     this.wantRunning = false;
     this.apply();
@@ -112,9 +148,11 @@ export class HorrorAudio implements GameAudio {
     this.chain = this.chain.then(async () => {
       const ctx = this.S?.ctx;
       if (!ctx || ctx.state === "closed") return;
+      // una promesa de resume()/suspend() que nunca se resuelve bloquearia la cadena para siempre: se abandona a los 2 s
+      const limit = new Promise<void>((r) => setTimeout(r, 2000));
       try {
-        if (this.wantRunning) { if (ctx.state !== "running") await ctx.resume(); }
-        else if (ctx.state === "running") await ctx.suspend();
+        if (this.wantRunning) { if (ctx.state !== "running") await Promise.race([ctx.resume(), limit]); }
+        else if (ctx.state === "running") await Promise.race([ctx.suspend(), limit]);
       } catch { /* sin gesto del usuario: el vigilante reintentara */ }
     });
   }
@@ -124,8 +162,11 @@ export class HorrorAudio implements GameAudio {
     const ctx = this.S?.ctx;
     if (!ctx || this.assumeRunning) return;
     ctx.onstatechange = () => {
+      recorder.event(`contexto: ${ctx.state}`);
+      if (ctx.state === "running") { this.everRan = true; this.unbindEarlyGestures(); }
       if (this.wantRunning && ctx.state !== "running" && ctx.state !== "closed" && this.S?.ctx === ctx) this.apply();
     };
+    if (ctx.state === "running") { this.everRan = true; this.unbindEarlyGestures(); }
   }
 
   private startWatching(): void {
@@ -160,18 +201,66 @@ export class HorrorAudio implements GameAudio {
     }
   };
 
-  /** Vigilante (1 Hz): reanuda un contexto detenido por el navegador y reconstruye uno cerrado. */
+  /** Vigilante (1 Hz): reanuda, cura, reconstruye si hace falta y deja una linea en el registro de vuelo. */
   private watch(): void {
+    if (!this.wantRunning) { this.notRunningFor = 0; return; }
     const S = this.S;
-    if (!S || !this.wantRunning) return;
+    if (!S) { this.rebuild("sin contexto"); return; }
     const st = S.ctx.state as string;
+    this.record(S);
     if (st === "closed") { this.rebuild("el contexto se cerro"); return; }
-    if (st !== "running") { this.apply(); this.clockWall = 0; return; }
+    if (st !== "running") {
+      this.apply(); this.clockWall = 0;
+      const visible = typeof document === "undefined" || document.visibilityState === "visible";
+      // ya sono antes y lleva segundos sin volver: la promesa de resume() quedo colgada o el dispositivo cambio
+      this.notRunningFor = this.everRan && visible ? this.notRunningFor + 1 : 0;
+      if (this.notRunningFor >= 5) { this.notRunningFor = 0; this.rebuild(`el contexto sigue ${st}`); }
+      return;
+    }
+    this.notRunningFor = 0; this.everRan = true;
     if (this.clockStalled(S)) { this.rebuild("el reloj de audio no avanza"); return; }
+    this.heal(S);
     // vacia los efectos que llegaron mientras el contexto estaba parado (si no son muy viejos)
     const now = performance.now();
     const todo = this.pending.splice(0);
     for (const e of todo) if (now - e.t < 1500) this.with(e.fn, e.mix);
+    if (!this.bakesQueued) { this.bakesQueued = true; this.scheduleBakes(S); }
+  }
+
+  /** Restaura ganancias fuera de su valor nominal y deja constancia. */
+  private heal(S: Synth): boolean {
+    const fixes = S.heal();
+    if (!fixes.length) return false;
+    this.heals += fixes.length;
+    recorder.event(`cura: ${fixes.join("; ")}`);
+    return true;
+  }
+
+  /** Sonidos frecuentes pre-renderizados: se calculan tras el primer segundo de audio, de uno en uno, fuera del camino critico. */
+  private scheduleBakes(S: Synth): void {
+    if (typeof window === "undefined") return;
+    window.setTimeout(() => { if (this.S === S) bakeAll(S); }, 1500);
+  }
+
+  /** Una linea del registro de vuelo. */
+  private record(S: Synth): void {
+    const c = S.ctx as AudioContext & { outputLatency?: number; playoutStats?: { fallbackFramesEvents?: number; fallbackFramesDuration?: number } };
+    const wall = performance.now();
+    const st = S.stats;
+    const dt = (wall - this.lastTick.wall) / 1000;
+    const rate = (a: number, b: number) => (this.lastTick.wall && dt > 0.2 ? Math.round((a - b) / dt) : 0);
+    const nodes = rate(st.made, this.lastTick.made), params = rate(st.params, this.lastTick.params);
+    this.lastTick = { wall, made: st.made, params: st.params };
+    const g = (p: AudioParam) => (Number.isFinite(p.value) ? p.value.toFixed(2) : "NaN");
+    const ps = c.playoutStats;
+    recorder.tick({
+      st: c.state, clk: this.clockRatio.toFixed(2), bl: (c.baseLatency ?? 0).toFixed(3), ol: (c.outputLatency ?? 0).toFixed(3),
+      m: g(S.master.gain), sfx: g(S.sfx.gain), amb: g(S.amb.gain), mus: g(S.music.gain), voi: g(S.voice.gain),
+      lp: S.isMuffled ? S.lp.frequency.value.toFixed(0) : "-",
+      live: st.live, nps: nodes, pps: params, pk: this.lastPeak.toFixed(3),
+      rb: this.rebuilds, hl: this.heals, vis: typeof document !== "undefined" && document.visibilityState === "visible" ? 1 : 0,
+      fb: ps ? `${ps.fallbackFramesEvents ?? 0}/${(ps.fallbackFramesDuration ?? 0).toFixed(2)}` : undefined,
+    });
   }
 
   /**
@@ -183,6 +272,7 @@ export class HorrorAudio implements GameAudio {
     const wall = performance.now() / 1000, audio = S.ctx.currentTime;
     if (this.clockWall > 0) {
       const dw = wall - this.clockWall, da = audio - this.clockAudio;
+      if (dw > 0.2) this.clockRatio = da / dw;
       // un hilo de temporizadores atrasado (pestana en segundo plano) infla dw: solo cuenta si el contexto no avanza casi nada
       this.stalledFor = dw > 0.5 && da < dw * 0.5 ? this.stalledFor + dw : 0;
     }
@@ -198,13 +288,15 @@ export class HorrorAudio implements GameAudio {
       baseLatency: S ? +(S.ctx.baseLatency ?? 0).toFixed(4) : 0, live: S?.live ?? 0,
       wantRunning: this.wantRunning, suspended: this.suspended, rebuilds: this.rebuilds, lastReason: this.lastReason,
       peak: +this.lastPeak.toFixed(3), stalledFor: +this.stalledFor.toFixed(1), pending: this.pending.length,
+      heals: this.heals, clockRatio: +this.clockRatio.toFixed(2), quietFor: +this.quietFor.toFixed(1),
+      nodes: S?.stats.made ?? 0, params: S?.stats.params ?? 0, baked: S ? bakedReady(S) : 0, log: recorder.recent,
     };
   }
 
-  /** Mide la salida: NaN/Inf o silencio absoluto sostenido significan que el grafo se rompio. */
+  /** Mide la salida: NaN/Inf o silencio sostenido significan que el grafo se rompio. */
   private meter(dt: number): void {
     const S = this.S;
-    if (!S || !this.wantRunning || S.ctx.state !== "running") { this.silentFor = 0; return; }
+    if (!S || !this.wantRunning || S.ctx.state !== "running") { this.quietFor = 0; return; }
     if (!this.buf) this.buf = new Float32Array(S.analyser.fftSize) as Float32Array<ArrayBuffer>;
     S.analyser.getFloatTimeDomainData(this.buf);
     let peak = 0, bad = false;
@@ -215,33 +307,42 @@ export class HorrorAudio implements GameAudio {
       if (a > peak) peak = a;
     }
     this.lastPeak = Math.max(peak, this.lastPeak * 0.8);
+    if (bad) { this.rebuild("salida con NaN"); return; }
     const audible = !this.muted && this.volume > 0.01;
-    this.silentFor = audible && peak === 0 ? this.silentFor + dt : 0;
-    if (bad) this.rebuild("salida con NaN");
-    else if (this.silentFor > 4) this.rebuild("silencio absoluto");
+    // silencios legitimos: ducking previo a un susto, muerte en curso (paso bajo y corte de capas)
+    const excused = S.ducked || S.isMuffled || performance.now() / 1000 - this.lastDead < 8;
+    if (peak >= QUIET_PEAK) { this.quietFor = 0; this.quietRebuilds = 0; return; }
+    this.quietFor = audible && !excused ? this.quietFor + dt : 0;
+    // primero se intenta curar (ganancia colapsada); si sigue mudo, se reconstruye (como mucho 3 veces seguidas)
+    if (this.quietFor > 3 && !this.quietHealed) { this.quietHealed = true; this.heal(S); }
+    else if (this.quietFor > 6 && this.quietRebuilds < 3) { this.quietRebuilds++; this.quietHealed = false; this.rebuild("silencio sostenido"); }
+    if (this.quietFor === 0) this.quietHealed = false;
   }
 
-  /** Crea un grafo nuevo (y un AudioContext nuevo) conservando volumen, silencio y tema. */
+  /** Crea un grafo nuevo (y un AudioContext nuevo) conservando volumen, silencio y tema. Nunca deja el motor sin grafo. */
   private rebuild(reason: string): void {
     const now = typeof performance !== "undefined" ? performance.now() / 1000 : 0;
-    if (now - this.lastRebuild < 8) return;
+    if (now - this.lastRebuild < 8 || now - this.lastFail < 1) return;
+    // el contexto nuevo se crea primero: si el navegador se niega, el motor sigue como estaba y se reintenta en 1 s
+    let next: Synth;
+    try { next = new Synth(this.factory?.()); } catch (e) {
+      this.lastFail = now;
+      recorder.event(`reconstruccion fallida (${reason}): ${String((e as Error)?.message ?? e)}`);
+      return;
+    }
     this.lastRebuild = now;
     console.warn(`[audio] reiniciando: ${reason}`);
+    recorder.event(`reconstruir: ${reason}`);
     this.rebuilds++; this.lastReason = reason;
-    this.clockWall = 0; this.stalledFor = 0;
+    this.clockWall = 0; this.stalledFor = 0; this.notRunningFor = 0;
     const old = this.S;
-    this.S = null;
     this.ambience = null; this.drone = null; this.siren = null; this.dread = null;
     this.bed?.dispose(); this.bed = null;
     for (const v of this.voices.values()) { try { v.dispose(); } catch { /* ya parado */ } }
     this.voices.clear();
-    if (old) { try { void old.ctx.close(); } catch { /* ya cerrado */ } }
-    this.silentFor = 0; this.pending = []; this.buf = null; this.lastPeak = 0;
-    try { this.S = new Synth(this.factory?.()); } catch { return; }
-    this.S.setVolume(this.volume);
-    this.S.setMuted(this.muted);
-    this.startLayers();
-    this.watchState();
+    if (old) { try { old.removeMuffle(); void old.ctx.close().catch(() => {}); } catch { /* ya cerrado */ } }
+    this.quietFor = 0; this.pending = []; this.buf = null; this.lastPeak = 0;
+    this.adopt(next);
     this.apply();
     this.onStatus?.("Audio reiniciado");
   }
@@ -288,14 +389,17 @@ export class HorrorAudio implements GameAudio {
     this.drone?.update(f.tension);
     this.siren?.update(f.dt, { progress: f.progress, chasing: f.chasing, tension: f.tension, powered: f.powered, powerLow: f.powerLow });
     // durante la muerte se corta todo lo organico: el silencio previo al grito debe ser real
-    if (!f.dead) {
+    if (f.dead) this.lastDead = performance.now() / 1000;
+    else {
       this.dread?.update({ dt: f.dt, tension: f.tension, chasing: f.chasing, intensity: f.dread * (1 + f.darkness * 1.2), listener: { x: f.listener.x, z: f.listener.z, fx: f.listener.fx, fz: f.listener.fz } });
       this.breath.update(S, f.dt, {
         exertion: f.exertion, tension: f.tension, running: f.running, exhausted: f.exhausted,
         hidden: f.hidden, hiddenNearGhost: f.hiddenNearGhost, holding: f.holding,
       });
     }
-    for (const g of f.ghosts) {
+    // solo suenan los 2 fantasmas mas cercanos: el tercero y el cuarto quedan tapados por estos y cuestan nodos
+    const near = f.ghosts.length > 2 ? [...f.ghosts].sort((x, y) => x.dist - y.dist).slice(0, 2) : f.ghosts;
+    for (const g of near) {
       let v = this.voices.get(g.kind);
       if (!v) { v = new GhostVoice(S, g.kind); this.voices.set(g.kind, v); }
       v.update(f.dt, g, f.tension);

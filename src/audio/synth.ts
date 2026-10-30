@@ -5,6 +5,8 @@ import { decodeSample, type SampleId } from "./samples";
 
 /** Tope de tonos y rafagas simultaneos antes de descartar los de poco volumen. */
 export const MAX_LIVE_VOICES = 42;
+/** Cola maxima de la reverberacion (s). */
+export const MAX_REVERB_SECONDS = 2.4;
 
 export type NoiseKind = "white" | "pink" | "brown";
 
@@ -43,6 +45,25 @@ export interface NoiseOpts {
   offset?: number;
 }
 
+const noiseCache = new Map<number, { white: AudioBuffer; pink: AudioBuffer; brown: AudioBuffer }>();
+
+/** Los buffers de ruido no dependen del contexto: se generan una vez por frecuencia de muestreo. */
+function sharedNoise(rate: number, make: (sec: number, kind: NoiseKind) => AudioBuffer) {
+  let n = noiseCache.get(rate);
+  if (!n) {
+    n = { white: make(2.5, "white"), pink: make(4, "pink"), brown: make(4, "brown") };
+    noiseCache.set(rate, n);
+  }
+  return n;
+}
+
+/** Sonidos pre-renderizados (clave -> variantes), compartidos entre contextos de la misma frecuencia. */
+const bakedCache = new Map<string, AudioBuffer[]>();
+const bakeQueued = new Set<string>();
+let bakeChain: Promise<void> = Promise.resolve();
+
+export type BakeBuild = (S: Synth, variant: number) => void;
+
 export function makeDistCurve(k: number, n = 512): Float32Array<ArrayBuffer> {
   const c = new Float32Array(n) as Float32Array<ArrayBuffer>;
   for (let i = 0; i < n; i++) {
@@ -77,12 +98,26 @@ export class Synth {
   trim = 1;
   /** Fuentes efimeras (tonos y rafagas) vivas ahora mismo. */
   live = 0;
+  /** Contadores para el registro: nodos creados y llamadas a parametros desde el inicio. */
+  made = 0;
+  paramCalls = 0;
+  private duckUntil = 0;
+  private muffleUntil = 0;
+  private muffled = false;
+  private muffleTimer: number | null = null;
+  private lastRamp = new WeakMap<AudioParam, number>();
+  private gainSetAt = -10;
+  private lastVariant = new Map<string, number>();
 
-  /** `ctx` permite inyectar un OfflineAudioContext (pruebas de render sin dispositivo de audio). */
-  constructor(ctx?: AudioContext) {
+  /**
+   * `ctx` permite inyectar un OfflineAudioContext (pruebas de render y sonidos pre-renderizados).
+   * `raw`: sin limitador ni reverberacion, ganancias a 1 (renderizado de sonidos pre-calculados, ver `bake`).
+   * `latency`: "playback" por defecto (mas margen frente a tirones del sistema; los sustos compensan la latencia).
+   */
+  constructor(ctx?: AudioContext, opts: { samples?: boolean; latency?: AudioContextLatencyCategory; raw?: boolean } = {}) {
     if (!ctx) {
       const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      ctx = new Ctx({ latencyHint: "balanced" });
+      ctx = new Ctx({ latencyHint: opts.latency ?? "playback" });
     }
     this.ctx = ctx;
     this.master = ctx.createGain();
@@ -99,18 +134,22 @@ export class Synth {
     const curve = new Float32Array(1024) as Float32Array<ArrayBuffer>;
     for (let i = 0; i < curve.length; i++) curve[i] = Math.tanh(((i * 2) / (curve.length - 1) - 1) * 1.15) / Math.tanh(1.15);
     clip.curve = curve;
-    // filtro paso bajo maestro: abierto salvo en la muerte, donde cierra el oido como si se fuera la conciencia
+    // filtro paso bajo para la muerte (cierra el oido como si se fuera la conciencia): solo esta en la cadena durante `muffle`
     this.lp = ctx.createBiquadFilter();
     this.lp.type = "lowpass";
     this.lp.frequency.value = 20000;
     this.lp.Q.value = 0.4;
-    this.master.connect(this.lp);
-    this.lp.connect(this.comp);
-    this.comp.connect(clip);
-    clip.connect(ctx.destination);
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 1024;
-    clip.connect(this.analyser);
+    if (opts.raw) {
+      this.master.gain.value = 1;
+      this.master.connect(ctx.destination);
+    } else {
+      this.master.connect(this.comp);
+      this.comp.connect(clip);
+      clip.connect(ctx.destination);
+      clip.connect(this.analyser);
+    }
 
     this.sfx = ctx.createGain(); this.sfx.gain.value = 1.25;
     this.amb = ctx.createGain(); this.amb.gain.value = 0.25;
@@ -122,20 +161,22 @@ export class Synth {
     this.reverbSend.gain.value = 1;
     this.reverb = ctx.createConvolver();
     this.reverbReturn = ctx.createGain();
-    this.reverbReturn.gain.value = 0.5;
+    this.reverbReturn.gain.value = opts.raw ? 0 : 0.5;
     this.reverbSend.connect(this.reverb);
     this.reverb.connect(this.reverbReturn);
     this.reverbReturn.connect(this.master);
-    this.setReverb(2.2, 0.6);
+    if (opts.raw) for (const b of [this.sfx, this.amb, this.music, this.voice]) b.gain.value = 1;
+    else this.setReverb(2.2, 0.6);
 
     this.dist = ctx.createWaveShaper();
     this.dist.curve = makeDistCurve(40);
     this.dist.oversample = "2x";
 
-    this.white = this.makeNoise(2.5, "white");
-    this.pink = this.makeNoise(4, "pink");
-    this.brown = this.makeNoise(4, "brown");
-    this.loadSamples();
+    const noise = sharedNoise(ctx.sampleRate, (sec, kind) => this.makeNoise(sec, kind));
+    this.white = noise.white;
+    this.pink = noise.pink;
+    this.brown = noise.brown;
+    if (opts.samples !== false) this.loadSamples();
   }
 
   private samples = new Map<SampleId, AudioBuffer>();
@@ -166,9 +207,16 @@ export class Synth {
 
   get now(): number { return this.ctx.currentTime; }
 
+  /** Latencia de salida estimada (s): los golpes sincronizados con la imagen se adelantan esto. */
+  get lead(): number {
+    const c = this.ctx as AudioContext;
+    return Math.max(0, Math.min(0.15, (c.outputLatency || 0) || (c.baseLatency || 0)));
+  }
+
   /** Baja ambiente y musica durante `secs` (silencio previo a un susto) y los devuelve con una subida lenta. */
   duck(level: number, secs: number, release = 1.4): void {
     const t = this.now;
+    this.duckUntil = Math.max(this.duckUntil, t + secs + release * 1.5);
     for (const [bus, base] of [[this.amb, 0.25], [this.music, 0.8]] as const) {
       bus.gain.cancelScheduledValues(t);
       bus.gain.setTargetAtTime(base * level, t, 0.08);
@@ -181,18 +229,47 @@ export class Synth {
    * Empieza en `at` (segundos del reloj del contexto).
    */
   muffle(freq: number, ramp: number, hold: number, release: number, at = this.now): void {
+    this.insertMuffle();
     const f = this.lp.frequency;
     f.cancelScheduledValues(at);
-    f.setValueAtTime(Math.max(20, f.value), at);
+    f.setValueAtTime(20000, at);
     f.exponentialRampToValueAtTime(Math.max(60, freq), at + ramp);
     f.setValueAtTime(Math.max(60, freq), at + ramp + hold);
     f.exponentialRampToValueAtTime(20000, at + ramp + hold + release);
+    this.muffleUntil = at + ramp + hold + release;
+    if (this.muffleTimer !== null) clearTimeout(this.muffleTimer);
+    const ms = Math.max(0, (this.muffleUntil - this.now) * 1000) + 600;
+    this.muffleTimer = setTimeout(() => this.removeMuffle(), ms) as unknown as number;
   }
+
+  private insertMuffle(): void {
+    if (this.muffled) return;
+    this.muffled = true;
+    this.master.disconnect(this.comp);
+    this.master.connect(this.lp);
+    this.lp.connect(this.comp);
+  }
+
+  /** Saca el filtro de la cadena: fuera de la muerte no hay nada entre el mezclador y el limitador. */
+  removeMuffle(): void {
+    if (!this.muffled) return;
+    this.muffled = false;
+    this.muffleTimer = null;
+    try { this.master.disconnect(this.lp); this.lp.disconnect(this.comp); } catch { /* ya desconectado */ }
+    this.master.connect(this.comp);
+  }
+
+  /** True mientras dura el silencio previo a un susto (ver `duck`). */
+  get ducked(): boolean { return this.now < this.duckUntil; }
+
+  /** True mientras `lp` esta en la cadena. */
+  get isMuffled(): boolean { return this.muffled; }
 
   setVolume(v: number): void { this.volume = v; this.applyGain(); }
   setMuted(m: boolean): void { this.muted = m; this.applyGain(); }
   private applyGain(): void {
     const t = this.ctx.currentTime;
+    this.gainSetAt = t;
     this.master.gain.cancelScheduledValues(t);
     this.master.gain.setTargetAtTime(this.muted ? 0 : this.volume, t, 0.03);
   }
@@ -200,17 +277,16 @@ export class Synth {
   /** Reverberacion convolucional con respuesta al impulso generada (ruido con decaimiento). */
   setReverb(seconds: number, damp: number): void {
     const ctx = this.ctx;
-    const len = Math.floor(ctx.sampleRate * seconds);
-    const ir = ctx.createBuffer(2, len, ctx.sampleRate);
-    for (let ch = 0; ch < 2; ch++) {
-      const d = ir.getChannelData(ch);
-      let lp = 0;
-      for (let i = 0; i < len; i++) {
-        const t = i / len;
-        const n = Math.random() * 2 - 1;
-        lp += (n - lp) * (1 - damp * (0.35 + 0.65 * t)); // oscurece la cola
-        d[i] = lp * Math.pow(1 - t, 2.4) * (i < 80 ? i / 80 : 1);
-      }
+    // respuesta mono (la mitad de coste de convolucion) y cola maxima de 2,4 s
+    const len = Math.floor(ctx.sampleRate * Math.min(seconds, MAX_REVERB_SECONDS));
+    const ir = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = ir.getChannelData(0);
+    let lp = 0;
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      const n = Math.random() * 2 - 1;
+      lp += (n - lp) * (1 - damp * (0.35 + 0.65 * t)); // oscurece la cola
+      d[i] = lp * Math.pow(1 - t, 2.4) * (i < 80 ? i / 80 : 1);
     }
     this.reverb.buffer = ir;
   }
@@ -257,6 +333,7 @@ export class Synth {
 
   tone(o: ToneOpts): OscillatorNode | null {
     if (this.overloaded(o.vol)) return null;
+    this.made += 5;
     const ctx = this.ctx;
     const t = o.t ?? ctx.currentTime;
     const osc = ctx.createOscillator();
@@ -291,6 +368,7 @@ export class Synth {
 
   noise(o: NoiseOpts): AudioBufferSourceNode | null {
     if (this.overloaded(o.vol)) return null;
+    this.made += 5;
     const ctx = this.ctx;
     const t = o.t ?? ctx.currentTime;
     const src = ctx.createBufferSource();
@@ -325,6 +403,7 @@ export class Synth {
     formants: [number, number, number][]; // [frecuencia, Q, ganancia]
     type?: OscillatorType; vibRate?: number; vibDepth?: number; noiseMix?: number; dist?: boolean; dest?: AudioNode; send?: number;
   }): void {
+    this.made += 8 + opts.formants.length * 3;
     const ctx = this.ctx;
     const t = opts.t ?? ctx.currentTime;
     const src = ctx.createOscillator();
@@ -363,6 +442,99 @@ export class Synth {
     src.start(t); src.stop(t + opts.dur + 0.05);
   }
 
+  /** Contadores para el registro de vuelo. */
+  get stats(): { made: number; params: number; live: number } {
+    return { made: this.made, params: this.paramCalls, live: this.live };
+  }
+
+  /**
+   * Autocuracion: si una ganancia se sale de su valor nominal fuera de una ventana legitima (duck, muerte, cambio de
+   * volumen) o contiene NaN, se restaura. Devuelve la lista de arreglos hechos (vacia si todo esta bien).
+   */
+  heal(): string[] {
+    const t = this.now;
+    const fixes: string[] = [];
+    const check = (name: string, p: AudioParam, nominal: number) => {
+      const v = p.value;
+      if (Number.isFinite(v) && Math.abs(v - nominal) <= 0.2 * Math.abs(nominal) + 0.02) return;
+      p.cancelScheduledValues(t);
+      p.setValueAtTime(nominal, t);
+      fixes.push(`${name} ${Number.isFinite(v) ? v.toFixed(3) : "NaN"} -> ${nominal}`);
+    };
+    if (t - this.gainSetAt > 1.5) check("master", this.master.gain, this.muted ? 0 : this.volume);
+    check("sfx", this.sfx.gain, 1.25);
+    check("voice", this.voice.gain, 1.5);
+    check("reverbReturn", this.reverbReturn.gain, 0.5);
+    if (t > this.duckUntil + 0.5) {
+      check("amb", this.amb.gain, 0.25);
+      check("music", this.music.gain, 0.8);
+    }
+    if (this.muffled && t > this.muffleUntil + 1) {
+      this.removeMuffle();
+      fixes.push("paso bajo retirado");
+    } else if (this.muffled && !Number.isFinite(this.lp.frequency.value)) {
+      this.lp.frequency.cancelScheduledValues(t);
+      this.lp.frequency.setValueAtTime(20000, t);
+      fixes.push("paso bajo NaN");
+    }
+    return fixes;
+  }
+
+  /**
+   * Pre-renderiza un sonido breve en un OfflineAudioContext (`variants` variantes, mono, sin limitador). Despues,
+   * `playBaked` lo reproduce con 2 nodos en vez de 8 a 16. Se hace en segundo plano y de uno en uno; mientras no
+   * este listo el llamador sintetiza en vivo. Las variantes se comparten entre contextos de la misma frecuencia.
+   */
+  bake(key: string, dur: number, variants: number, build: BakeBuild): void {
+    const rate = this.ctx.sampleRate;
+    const id = `${rate}:${key}`;
+    if (bakedCache.has(id) || bakeQueued.has(id) || typeof OfflineAudioContext === "undefined") return;
+    bakeQueued.add(id);
+    bakeChain = bakeChain.then(async () => {
+      try {
+        const out: AudioBuffer[] = [];
+        for (let i = 0; i < variants; i++) {
+          const off = new OfflineAudioContext(1, Math.ceil(dur * rate), rate);
+          const s = new Synth(off as unknown as AudioContext, { samples: false, raw: true });
+          build(s, i);
+          out.push(await off.startRendering());
+          await new Promise((r) => setTimeout(r, 30)); // cede el hilo principal entre variantes
+        }
+        bakedCache.set(id, out);
+      } catch { /* sin OfflineAudioContext o fallo de render: se queda en sintesis en vivo */ }
+      finally { bakeQueued.delete(id); }
+    });
+  }
+
+  /** True si el sonido pre-renderizado esta listo. */
+  hasBaked(key: string): boolean { return bakedCache.has(`${this.ctx.sampleRate}:${key}`); }
+
+  /**
+   * Reproduce una variante del sonido pre-renderizado (distinta de la anterior) con volumen `vol` y variacion de tono
+   * `rate` (1 = original). Devuelve null si aun no esta listo o hay sobrecarga: el llamador sintetiza en vivo o lo omite.
+   */
+  playBaked(key: string, o: { vol: number; rate?: number; t?: number; dest?: AudioNode; send?: number }): AudioBufferSourceNode | null {
+    const list = bakedCache.get(`${this.ctx.sampleRate}:${key}`);
+    if (!list || !list.length) return null;
+    if (this.overloaded(o.vol)) return null;
+    const ctx = this.ctx;
+    let i = Math.floor(Math.random() * list.length);
+    if (list.length > 1 && i === this.lastVariant.get(key)) i = (i + 1) % list.length;
+    this.lastVariant.set(key, i);
+    const src = ctx.createBufferSource();
+    src.buffer = list[i];
+    if (o.rate && o.rate !== 1) src.playbackRate.value = o.rate;
+    const g = ctx.createGain();
+    g.gain.value = o.vol * this.trim;
+    src.connect(g);
+    this.out(g, o.dest ?? this.sfx, o.send ?? 0);
+    this.made += o.send ? 3 : 2;
+    src.start(o.t ?? ctx.currentTime);
+    this.live++;
+    src.onended = () => { this.live--; src.disconnect(); g.disconnect(); };
+    return src;
+  }
+
   /**
    * Panner para fuentes puntuales. `equalpower` es mucho mas barato que HRTF (una convolucion por fuente y
    * bloque de audio) y basta para ubicar de lado; HRTF solo cuando se pide (`hq`).
@@ -379,29 +551,51 @@ export class Synth {
   }
 
   private lastPan = new WeakMap<AudioNode, number>();
+  private lastPos = new WeakMap<AudioNode, [number, number, number]>();
 
-  /** Mueve una fuente. Se limita a ~15 Hz y se vacia la linea de tiempo del parametro para que no crezca. */
+  /** Mueve una fuente. Maximo ~10 Hz y solo si se ha desplazado (una sola llamada por parametro). */
   setPannerPos(p: PannerNode, x: number, y: number, z: number, force = false): void {
     const t = this.ctx.currentTime;
-    if (!force && t - (this.lastPan.get(p) ?? -1) < 0.066) return;
+    if (!force && t - (this.lastPan.get(p) ?? -1) < 0.1) return;
+    const prev = this.lastPos.get(p);
+    if (!force && prev && Math.abs(prev[0] - x) < 0.05 && Math.abs(prev[1] - y) < 0.05 && Math.abs(prev[2] - z) < 0.05) return;
     this.lastPan.set(p, t);
+    this.lastPos.set(p, [x, y, z]);
     if (p.positionX) {
       this.glide(p.positionX, x, t); this.glide(p.positionY, y, t); this.glide(p.positionZ, z, t);
     } else (p as unknown as { setPosition(x: number, y: number, z: number): void }).setPosition(x, y, z);
   }
 
-  /** Lleva un parametro a `v` en ~70 ms descartando los eventos futuros previos (la linea de tiempo no crece). */
+  /** Lleva un parametro a `v` en ~120 ms con una sola llamada (la rampa parte del valor anterior). */
   private glide(param: AudioParam, v: number, t: number): void {
-    param.cancelScheduledValues(t);
-    param.linearRampToValueAtTime(v, t + 0.07);
+    this.paramCalls++;
+    param.linearRampToValueAtTime(v, t + 0.12);
+  }
+
+  /**
+   * Acerca un parametro a `target` (constante de tiempo `tc`). Se ignora si el objetivo casi no cambia (2 %):
+   * las capas continuas lo llaman cada frame y asi casi no generan trafico hacia el hilo de audio.
+   */
+  ramp(param: AudioParam, target: number, tc: number): void {
+    const last = this.lastRamp.get(param);
+    if (last !== undefined && Math.abs(target - last) <= 0.02 * Math.max(0.05, Math.abs(last))) return;
+    this.lastRamp.set(param, target);
+    this.paramCalls++;
+    param.setTargetAtTime(target, this.ctx.currentTime, tc);
   }
 
   private lastListener = -1;
 
+  private lastListenerPose: number[] | null = null;
+
   setListener(x: number, y: number, z: number, fx: number, fy: number, fz: number): void {
     const l = this.ctx.listener;
     const t = this.ctx.currentTime;
-    if (t - this.lastListener < 0.066) return;
+    if (t - this.lastListener < 0.1) return;
+    const prev = this.lastListenerPose;
+    if (prev && Math.abs(prev[0] - x) < 0.05 && Math.abs(prev[1] - y) < 0.05 && Math.abs(prev[2] - z) < 0.05
+      && Math.abs(prev[3] - fx) < 0.01 && Math.abs(prev[4] - fy) < 0.01 && Math.abs(prev[5] - fz) < 0.01) return;
+    this.lastListenerPose = [x, y, z, fx, fy, fz];
     this.lastListener = t;
     if (l.positionX) {
       this.glide(l.positionX, x, t); this.glide(l.positionY, y, t); this.glide(l.positionZ, z, t);
