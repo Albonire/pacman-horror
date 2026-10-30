@@ -152,6 +152,17 @@ try {
   const recovered = await page.waitForFunction(() => { const S = window.__umbral.audio.S; return S && S.ctx !== window.__ctxFailBefore && S.ctx.state === "running"; }, { timeout: 40000 }).then(() => true, () => false);
   check("si falla la creacion del contexto (2 veces) el audio se recupera solo", recovered, await page.evaluate(() => JSON.stringify(window.__umbral.audio.diag())));
 
+  // microcortes del reloj de audio (se para y se pone al dia, como en el registro de un equipo real): el buffer se amplia solo
+  // el contexto debe tener mas de 6 s (los primeros segundos no cuentan) y el reloj falso no puede dar tiempos negativos
+  await page.waitForFunction(() => window.__umbral.audio.S.ctx.currentTime > 8, { timeout: 30000, polling: 250 });
+  await page.evaluate(() => {
+    const c = window.__umbral.audio.S.ctx; window.__ctxChoppy = c;
+    const get = Object.getOwnPropertyDescriptor(AudioContext.prototype, "currentTime") || Object.getOwnPropertyDescriptor(BaseAudioContext.prototype, "currentTime");
+    Object.defineProperty(c, "currentTime", { get: () => Math.max(0, get.get.call(c) - (Math.floor(performance.now() / 1000) % 2 ? 0.3 : 0)), configurable: true });
+  });
+  const widened = await page.waitForFunction(() => { const A = window.__umbral.audio; return A.S && A.S.ctx !== window.__ctxChoppy && A.S.ctx.state === "running" && A.diag().latency === 0.2; }, { timeout: 60000, polling: 500 }).then(() => true, () => false);
+  check("con microcortes del reloj de audio el buffer se amplia y se recuerda", widened && await page.evaluate(() => localStorage.getItem("umbral.audio.latency") === "0.2" && window.__umbral.audio.S.ctx.baseLatency > 0.1), await page.evaluate(() => JSON.stringify({ d: window.__umbral.audio.diag().latency, bl: window.__umbral.audio.S.ctx.baseLatency })));
+
   // registro de vuelo: F9 abre el panel con lineas del contexto y se guarda para sobrevivir a una recarga
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "F9" })));
   const logTxt = await page.evaluate(() => document.querySelector("[data-audio-log] pre")?.textContent ?? "");
@@ -244,7 +255,8 @@ try {
     return true;
   });
   check("preparar la muerte", died);
-  await page.evaluate(() => { window.__peak = 0; setInterval(() => { window.__peak = Math.max(window.__peak, window.__umbral.audio.lastPeak || 0); }, 50); });
+  // se muestrea el analizador cada 20 ms (el medidor del motor se actualiza cada 0,5 s y puede perder el golpe)
+  await page.evaluate(() => { window.__peak = 0; const buf = new Float32Array(1024); setInterval(() => { const S = window.__umbral.audio.S; if (!S) return; S.analyser.getFloatTimeDomainData(buf); for (const v of buf) window.__peak = Math.max(window.__peak, Math.abs(v)); }, 20); });
   check("el fantasma atrapa y empieza el susto de muerte", await waitPhase("dying", 40000));
   check("el screamer 2D se muestra durante la muerte", await page.waitForFunction(() => window.__scareSeen === true, { timeout: 60000 }).then(() => true, () => false));
   check("el grito del susto de muerte suena (pico de salida > 0,15)", await page.evaluate(() => window.__peak) > 0.15, String(await page.evaluate(() => window.__peak)));

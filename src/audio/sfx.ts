@@ -153,7 +153,7 @@ export function deathScream(S: Synth, kind: FaceKind, gain = 1): void {
   ][kind % 4];
   const t0 = S.now;
   // el golpe se adelanta la latencia de salida (con latencyHint "playback" es mayor) para que siga coincidiendo con el destello
-  const hit = t0 + 0.38 - S.lead;
+  const hit = Math.max(t0 + 0.1, t0 + 0.38 - S.lead);
   const dur = 1.55;
 
   // 1) aspiracion previa: el aire que entra justo antes del grito (sube y se corta en seco)

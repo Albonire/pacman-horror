@@ -114,7 +114,7 @@ export class Synth {
    * `raw`: sin limitador ni reverberacion, ganancias a 1 (renderizado de sonidos pre-calculados, ver `bake`).
    * `latency`: "playback" por defecto (mas margen frente a tirones del sistema; los sustos compensan la latencia).
    */
-  constructor(ctx?: AudioContext, opts: { samples?: boolean; latency?: AudioContextLatencyCategory; raw?: boolean } = {}) {
+  constructor(ctx?: AudioContext, opts: { samples?: boolean; latency?: AudioContextLatencyCategory | number; raw?: boolean } = {}) {
     if (!ctx) {
       const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       ctx = new Ctx({ latencyHint: opts.latency ?? "playback" });
@@ -210,7 +210,7 @@ export class Synth {
   /** Latencia de salida estimada (s): los golpes sincronizados con la imagen se adelantan esto. */
   get lead(): number {
     const c = this.ctx as AudioContext;
-    return Math.max(0, Math.min(0.15, (c.outputLatency || 0) || (c.baseLatency || 0)));
+    return Math.max(0, Math.min(0.3, (c.outputLatency || 0) || (c.baseLatency || 0)));
   }
 
   /** Baja ambiente y musica durante `secs` (silencio previo a un susto) y los devuelve con una subida lenta. */

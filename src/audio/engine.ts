@@ -22,6 +22,18 @@ const MIX = {
   screamerFlash: 0.6, scareHit: 0.75, pickup: 0.5, switchOn: 0.6, hide: 0.7, dread: 0.6, flashlight: 0.6, fruit: 0.5, wake: 0.6, pant: 1.1,
 } as const;
 
+const LATENCY_KEY = "umbral.audio.latency";
+/** Buffer ampliado (s) al detectar microcortes del reloj de audio: Chrome lo recorta a su maximo (~0,17 a 0,19 s). */
+const LATENCY_WIDE = 0.2;
+
+function loadLatency(): AudioContextLatencyCategory | number {
+  try {
+    const v = Number(localStorage.getItem(LATENCY_KEY));
+    if (v > 0 && v <= 0.5) return v;
+  } catch { /* sin almacenamiento */ }
+  return "playback";
+}
+
 /** Pico de salida por debajo del cual se considera silencio (-80 dB). */
 const QUIET_PEAK = 1e-4;
 
@@ -67,6 +79,13 @@ export class HorrorAudio implements GameAudio {
   private lastTick = { wall: 0, made: 0, params: 0 };
   private bakesQueued = false;
   private quietHealed = false;
+  /** Tamano de buffer pedido al navegador: "playback" (~20 ms) o, si se detectan microcortes, el maximo. */
+  private latency: AudioContextLatencyCategory | number = loadLatency();
+  /** Marcas (s) de saltos del reloj de audio respecto al de pared. */
+  private hiccups: number[] = [];
+  private bornAt = 0;
+  private stateChangedAt = 0;
+  private visChangedAt = 0;
   private quietRebuilds = 0;
 
   /** `factory` y `assumeRunning` permiten pruebas con un OfflineAudioContext. */
@@ -111,12 +130,12 @@ export class HorrorAudio implements GameAudio {
     this.startWatching();
     if (!this.S) {
       let next: Synth;
-      try { next = new Synth(this.factory?.()); } catch (e) {
+      try { next = new Synth(this.factory?.(), { latency: this.latency }); } catch (e) {
         // el vigilante lo reintenta cada segundo (wantRunning ya esta activo)
         recorder.event(`no se pudo crear el contexto: ${String((e as Error)?.message ?? e)}`);
         return;
       }
-      recorder.event(`contexto creado (${next.ctx.sampleRate} Hz, latencia base ${(next.ctx.baseLatency ?? 0).toFixed(3)} s)`);
+      recorder.event(`contexto creado (${next.ctx.sampleRate} Hz, pedido ${this.latency}, latencia base ${(next.ctx.baseLatency ?? 0).toFixed(3)} s)`);
       this.adopt(next);
     }
     this.apply();
@@ -125,6 +144,8 @@ export class HorrorAudio implements GameAudio {
   /** Pone en marcha un Synth nuevo con el volumen, silencio y tema actuales. */
   private adopt(next: Synth): void {
     this.S = next;
+    this.bornAt = performance.now() / 1000;
+    this.hiccups = [];
     next.setVolume(this.volume);
     next.setMuted(this.muted);
     this.startLayers();
@@ -163,6 +184,7 @@ export class HorrorAudio implements GameAudio {
     if (!ctx || this.assumeRunning) return;
     ctx.onstatechange = () => {
       recorder.event(`contexto: ${ctx.state}`);
+      this.stateChangedAt = performance.now() / 1000;
       if (ctx.state === "running") { this.everRan = true; this.unbindEarlyGestures(); }
       if (this.wantRunning && ctx.state !== "running" && ctx.state !== "closed" && this.S?.ctx === ctx) this.apply();
     };
@@ -177,6 +199,8 @@ export class HorrorAudio implements GameAudio {
       this.gestureBound = true;
       for (const ev of ["keydown", "pointerdown", "focus", "pageshow"]) window.addEventListener(ev, this.kick, true);
       document.addEventListener("visibilitychange", this.kick);
+      document.addEventListener("visibilitychange", this.onVisibility);
+      window.addEventListener("focus", this.onVisibility);
       document.addEventListener("pointerlockchange", this.kick);
     }
   }
@@ -189,9 +213,13 @@ export class HorrorAudio implements GameAudio {
       this.gestureBound = false;
       for (const ev of ["keydown", "pointerdown", "focus", "pageshow"]) window.removeEventListener(ev, this.kick, true);
       document.removeEventListener("visibilitychange", this.kick);
+      document.removeEventListener("visibilitychange", this.onVisibility);
+      window.removeEventListener("focus", this.onVisibility);
       document.removeEventListener("pointerlockchange", this.kick);
     }
   }
+
+  private onVisibility = (): void => { this.visChangedAt = performance.now() / 1000; };
 
   /** Cualquier gesto del usuario es una oportunidad para reanudar un contexto que el navegador haya detenido. */
   private kick = (): void => {
@@ -219,6 +247,7 @@ export class HorrorAudio implements GameAudio {
     }
     this.notRunningFor = 0; this.everRan = true;
     if (this.clockStalled(S)) { this.rebuild("el reloj de audio no avanza"); return; }
+    if (this.widenIfChoppy(S)) return;
     this.heal(S);
     // vacia los efectos que llegaron mientras el contexto estaba parado (si no son muy viejos)
     const now = performance.now();
@@ -258,7 +287,7 @@ export class HorrorAudio implements GameAudio {
       m: g(S.master.gain), sfx: g(S.sfx.gain), amb: g(S.amb.gain), mus: g(S.music.gain), voi: g(S.voice.gain),
       lp: S.isMuffled ? S.lp.frequency.value.toFixed(0) : "-",
       live: st.live, nps: nodes, pps: params, pk: this.lastPeak.toFixed(3),
-      rb: this.rebuilds, hl: this.heals, vis: typeof document !== "undefined" && document.visibilityState === "visible" ? 1 : 0,
+      rb: this.rebuilds, hl: this.heals, hc: this.hiccups.length, vis: typeof document !== "undefined" && document.visibilityState === "visible" ? 1 : 0,
       fb: ps ? `${ps.fallbackFramesEvents ?? 0}/${(ps.fallbackFramesDuration ?? 0).toFixed(2)}` : undefined,
     });
   }
@@ -273,11 +302,42 @@ export class HorrorAudio implements GameAudio {
     if (this.clockWall > 0) {
       const dw = wall - this.clockWall, da = audio - this.clockAudio;
       if (dw > 0.2) this.clockRatio = da / dw;
+      this.noteHiccup(wall, dw, da);
       // un hilo de temporizadores atrasado (pestana en segundo plano) infla dw: solo cuenta si el contexto no avanza casi nada
       this.stalledFor = dw > 0.5 && da < dw * 0.5 ? this.stalledFor + dw : 0;
     }
     this.clockWall = wall; this.clockAudio = audio;
     return this.stalledFor >= 3;
+  }
+
+  /**
+   * Microcortes: con el contexto en marcha el reloj de audio debe avanzar al ritmo del de pared. Saltos de mas del 15 %
+   * en un intervalo de ~1 s (se para y luego se pone al dia) indican que el hilo de audio del sistema se retrasa y
+   * se oiria como cortes. Se ignoran los primeros segundos, los cambios de estado y las pestanas ocultas.
+   */
+  private noteHiccup(wall: number, dw: number, da: number): void {
+    if (dw < 0.7 || dw > 2 || Math.abs(da / dw - 1) <= 0.15) return;
+    if (wall - this.bornAt < 6 || wall - this.stateChangedAt < 3 || wall - this.visChangedAt < 3) return;
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+    this.hiccups.push(wall);
+  }
+
+  /** Cuatro saltos en un minuto con el buffer corto: se reconstruye con el buffer al maximo y se recuerda para la proxima vez. */
+  private widenIfChoppy(S: Synth): boolean {
+    const wall = performance.now() / 1000;
+    this.hiccups = this.hiccups.filter((t) => wall - t < 60);
+    if (this.hiccups.length < 4 || this.assumeRunning) return false;
+    const cur = typeof this.latency === "number" ? this.latency : 0;
+    if (cur >= LATENCY_WIDE) {
+      if (this.hiccups.length === 4) recorder.event(`microcortes con el buffer ya al maximo (base ${(S.ctx.baseLatency ?? 0).toFixed(3)} s)`);
+      return false;
+    }
+    const n = this.hiccups.length;
+    this.latency = LATENCY_WIDE;
+    try { localStorage.setItem(LATENCY_KEY, String(LATENCY_WIDE)); } catch { /* sin almacenamiento */ }
+    this.lastRebuild = -100; // esta reconstruccion no cuenta para el limite de frecuencia
+    this.rebuild(`${n} microcortes del reloj de audio en 60 s: buffer ampliado a ${LATENCY_WIDE} s`);
+    return true;
   }
 
   /** Estado del audio para depuracion (`__umbral.audio.diag()` con `?debug`). */
@@ -288,7 +348,7 @@ export class HorrorAudio implements GameAudio {
       baseLatency: S ? +(S.ctx.baseLatency ?? 0).toFixed(4) : 0, live: S?.live ?? 0,
       wantRunning: this.wantRunning, suspended: this.suspended, rebuilds: this.rebuilds, lastReason: this.lastReason,
       peak: +this.lastPeak.toFixed(3), stalledFor: +this.stalledFor.toFixed(1), pending: this.pending.length,
-      heals: this.heals, clockRatio: +this.clockRatio.toFixed(2), quietFor: +this.quietFor.toFixed(1),
+      latency: this.latency, hiccups: this.hiccups.length, heals: this.heals, clockRatio: +this.clockRatio.toFixed(2), quietFor: +this.quietFor.toFixed(1),
       nodes: S?.stats.made ?? 0, params: S?.stats.params ?? 0, baked: S ? bakedReady(S) : 0, log: recorder.recent,
     };
   }
@@ -325,7 +385,7 @@ export class HorrorAudio implements GameAudio {
     if (now - this.lastRebuild < 8 || now - this.lastFail < 1) return;
     // el contexto nuevo se crea primero: si el navegador se niega, el motor sigue como estaba y se reintenta en 1 s
     let next: Synth;
-    try { next = new Synth(this.factory?.()); } catch (e) {
+    try { next = new Synth(this.factory?.(), { latency: this.latency }); } catch (e) {
       this.lastFail = now;
       recorder.event(`reconstruccion fallida (${reason}): ${String((e as Error)?.message ?? e)}`);
       return;
