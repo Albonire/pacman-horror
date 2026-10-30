@@ -1,7 +1,7 @@
 // Nucleo de sintesis Web Audio: buses, reverberacion, ruido y ayudantes para tonos/rafagas.
 // Todo el audio de UMBRAL es procedural: no hay archivos externos.
 
-import { SCREAM_AUDIO_BASE64 } from "./screamData";
+import { decodeSample, type SampleId } from "./samples";
 
 export type NoiseKind = "white" | "pink" | "brown";
 
@@ -66,6 +66,8 @@ export class Synth {
   readonly dist: WaveShaperNode;
   /** Medidor tras el limitador (detecta silencio muerto o NaN). */
   readonly analyser: AnalyserNode;
+  /** Paso bajo maestro (ver `muffle`). */
+  readonly lp: BiquadFilterNode;
   private volume = 0.8;
   private muted = false;
   /** Multiplicador de mezcla temporal para el efecto en curso (ver tabla MIX del motor). */
@@ -92,7 +94,13 @@ export class Synth {
     const curve = new Float32Array(1024) as Float32Array<ArrayBuffer>;
     for (let i = 0; i < curve.length; i++) curve[i] = Math.tanh(((i * 2) / (curve.length - 1) - 1) * 1.15) / Math.tanh(1.15);
     clip.curve = curve;
-    this.master.connect(this.comp);
+    // filtro paso bajo maestro: abierto salvo en la muerte, donde cierra el oido como si se fuera la conciencia
+    this.lp = ctx.createBiquadFilter();
+    this.lp.type = "lowpass";
+    this.lp.frequency.value = 20000;
+    this.lp.Q.value = 0.4;
+    this.master.connect(this.lp);
+    this.lp.connect(this.comp);
     this.comp.connect(clip);
     clip.connect(ctx.destination);
     this.analyser = ctx.createAnalyser();
@@ -122,30 +130,32 @@ export class Synth {
     this.white = this.makeNoise(2.5, "white");
     this.pink = this.makeNoise(4, "pink");
     this.brown = this.makeNoise(4, "brown");
-    this.initScreamBuffer();
+    this.loadSamples();
   }
 
-  private screamBuffer: AudioBuffer | null = null;
-  getScreamBuffer(): AudioBuffer | null { return this.screamBuffer; }
+  private samples = new Map<SampleId, AudioBuffer>();
+  private sampleWaiters = new Map<SampleId, ((b: AudioBuffer) => void)[]>();
 
-  private initScreamBuffer(): void {
-    if (typeof atob !== "function" || !this.ctx.decodeAudioData) return;
-    try {
-      const bin = atob(SCREAM_AUDIO_BASE64);
-      const len = bin.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
-      const raw = bytes.buffer;
-      const p = this.ctx.decodeAudioData(
-        raw,
-        (buf) => { this.screamBuffer = buf; },
-        () => { /* fallback a procedural */ },
-      );
-      if (p && typeof p.then === "function") {
-        p.then((buf) => { this.screamBuffer = buf; }).catch(() => {});
-      }
-    } catch {
-      // Ignorado en contextos offline o sin soporte de decodificacion
+  /** Muestra ya decodificada, o null si aun no esta lista (o no se pudo decodificar). */
+  getSample(id: SampleId): AudioBuffer | null { return this.samples.get(id) ?? null; }
+
+  /** Avisa cuando una muestra queda decodificada (inmediato si ya lo esta). */
+  whenSample(id: SampleId, fn: (b: AudioBuffer) => void): void {
+    const b = this.samples.get(id);
+    if (b) { fn(b); return; }
+    const list = this.sampleWaiters.get(id) ?? [];
+    list.push(fn);
+    this.sampleWaiters.set(id, list);
+  }
+
+  private loadSamples(): void {
+    for (const id of ["scream", "menuLoop"] as const) {
+      void decodeSample(this.ctx, id).then((buf) => {
+        if (!buf) return;
+        this.samples.set(id, buf);
+        for (const fn of this.sampleWaiters.get(id) ?? []) fn(buf);
+        this.sampleWaiters.delete(id);
+      });
     }
   }
 
@@ -159,6 +169,19 @@ export class Synth {
       bus.gain.setTargetAtTime(base * level, t, 0.08);
       bus.gain.setTargetAtTime(base, t + secs, release / 3);
     }
+  }
+
+  /**
+   * Cierra el oido: baja el paso bajo maestro hasta `freq` en `ramp` segundos, lo mantiene `hold` y lo abre en `release`.
+   * Empieza en `at` (segundos del reloj del contexto).
+   */
+  muffle(freq: number, ramp: number, hold: number, release: number, at = this.now): void {
+    const f = this.lp.frequency;
+    f.cancelScheduledValues(at);
+    f.setValueAtTime(Math.max(20, f.value), at);
+    f.exponentialRampToValueAtTime(Math.max(60, freq), at + ramp);
+    f.setValueAtTime(Math.max(60, freq), at + ramp + hold);
+    f.exponentialRampToValueAtTime(20000, at + ramp + hold + release);
   }
 
   setVolume(v: number): void { this.volume = v; this.applyGain(); }

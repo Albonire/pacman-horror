@@ -4,6 +4,7 @@ import type { ThemeId } from "../config/campaign";
 import type { FaceKind } from "../gfx/faces";
 import { Ambience, THEME_AUDIO } from "./ambience";
 import { Dread, type DreadKind } from "./dread";
+import { MenuBed } from "./menubed";
 import { Drone, Siren } from "./music";
 import * as fx from "./sfx";
 import { Synth } from "./synth";
@@ -28,6 +29,8 @@ export class HorrorAudio implements GameAudio {
   private drone: Drone | null = null;
   private siren: Siren | null = null;
   private dread: Dread | null = null;
+  private bed: MenuBed | null = null;
+  private bedOn = false;
   private breath = new BreathEngine();
   private voices = new Map<number, GhostVoice>();
   private suspended = false;
@@ -154,6 +157,7 @@ export class HorrorAudio implements GameAudio {
     const old = this.S;
     this.S = null;
     this.ambience = null; this.drone = null; this.siren = null; this.dread = null;
+    this.bed?.dispose(); this.bed = null;
     for (const v of this.voices.values()) { try { v.dispose(); } catch { /* ya parado */ } }
     this.voices.clear();
     if (old) { try { void old.ctx.close(); } catch { /* ya cerrado */ } }
@@ -174,6 +178,13 @@ export class HorrorAudio implements GameAudio {
     this.drone = new Drone(S, ta.droneRoot);
     this.siren = new Siren(S);
     this.dread = new Dread(S);
+    this.bed = new MenuBed(S, this.bedOn);
+  }
+
+  /** Ambiente del menu: encendido en menu y ficha de nivel, apagado en partida. */
+  setMenuBed(on: boolean): void {
+    this.bedOn = on;
+    this.bed?.set(on);
   }
 
   setVolume(v: number): void { this.volume = v; this.S?.setVolume(v); }

@@ -53,10 +53,18 @@ export class GhostSim {
   /** True si el ultimo contacto fue visual (sin error de giro y con embestida segura). */
   sawPlayer = false;
 
+  // sigilo: a veces el fantasma se acerca sin hacer ruido (y sin avisar con el pulso del jugador)
+  /** True mientras este fantasma se mueve en silencio. */
+  silent = false;
+  /** Segundos hasta volver a decidir si calla o hace ruido. */
+  silentT = 0;
+  private stealthSeed = 1;
+
   private field: Int16Array;
 
   constructor(kind: GhostKind, maze: Maze, spawn: Cell, corner: Cell) {
     this.kind = kind;
+    this.stealthSeed = 0x9e3779b1 * (kind + 1) >>> 0;
     this.spawn = spawn;
     this.corner = corner;
     this.cx = spawn[0];
@@ -67,6 +75,20 @@ export class GhostSim {
 
   get cell(): Cell { return [this.cx, this.cy]; }
   get active(): boolean { return this.mode !== "dormant"; }
+
+  /**
+   * Alterna periodos de ruido y de silencio. Usa su propia semilla (no el azar de la simulacion) para no
+   * alterar las partidas ya calibradas. En silencio no hay pasos ni respiracion ni latido que avisen.
+   */
+  updateStealth(dt: number, silentChance: number): void {
+    if (!this.lethal) { this.silent = false; this.silentT = 0; return; }
+    this.silentT -= dt;
+    if (this.silentT > 0) return;
+    this.stealthSeed = (Math.imul(this.stealthSeed, 1664525) + 1013904223) >>> 0;
+    const r = this.stealthSeed / 4294967296;
+    this.silent = r < silentChance;
+    this.silentT = 5 + ((this.stealthSeed >>> 8) & 255) / 255 * 8; // 5 a 13 s
+  }
   /** Puede matar al jugador. */
   get lethal(): boolean { return (this.mode === "scatter" || this.mode === "chase") && this.stun <= 0; }
 

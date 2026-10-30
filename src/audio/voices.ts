@@ -82,9 +82,18 @@ export class BreathEngine {
 }
 
 /** Voz posicional de un fantasma: silenciada durante el acecho (emboscada sin aviso acustico). */
+/**
+ * Voz posicional de un fantasma. Son criaturas de sigilo: cuando el fantasma "hace ruido" se oyen arrastrar los
+ * pies, un estertor y, muy cerca, un gruñido grave; cuando "calla" (`g.silent`) no suena nada y llega sin aviso.
+ * El cambio entre ambos estados es gradual para que no delate el momento exacto.
+ */
 export class GhostVoice {
   private out: GainNode;
   private panner: PannerNode;
+  private loud = 0;
+  private stepT = 0.4;
+  private breathT = 1.8;
+  private growlT = 0;
 
   constructor(private S: Synth, readonly kind: number) {
     const ctx = S.ctx;
@@ -95,10 +104,45 @@ export class GhostVoice {
     this.panner.connect(S.sfx);
   }
 
-  update(_dt: number, g: AudioGhost, _tension: number): void {
-    // Los fantasmas acechan en absoluto silencio (emboscada sin radar acustico previo)
-    this.out.gain.value = 0;
-    this.S.setPannerPos(this.panner, g.x, g.y, g.z);
+  update(dt: number, g: AudioGhost, _tension: number): void {
+    const S = this.S;
+    S.setPannerPos(this.panner, g.x, g.y, g.z);
+    const hunting = (g.mode === "chase" || g.mode === "scatter") && !g.frozen;
+    const want = hunting && !g.silent ? 1 : 0;
+    this.loud += (want - this.loud) * Math.min(1, dt * 2.2);
+    if (this.loud < 0.08 || g.dist > 16) return;
+    const prox = clamp(1 - g.dist / 16, 0, 1);
+    const vol = this.loud * (0.12 + prox * prox * 0.88);
+    const dest = this.panner;
+
+    // pasos pesados arrastrados: mas seguidos cuanto mas cerca (y mas rapido se mueve)
+    this.stepT -= dt;
+    if (this.stepT <= 0) {
+      this.stepT = lerp(1.15, 0.5, prox) * (0.9 + rnd() * 0.25);
+      S.noise({ kind: "brown", lp: 520, hp: 40, dur: 0.16, a: 0.004, vol: 0.5 * vol, dest, send: 0.12 });
+      S.tone({ f0: 70, f1: 38, dur: 0.14, a: 0.003, vol: 0.34 * vol, lp: 220, dest });
+      // arrastre humedo entre paso y paso
+      S.noise({ kind: "pink", bp: 900, bp1: 350, q: 1.4, dur: 0.22, a: 0.05, vol: 0.12 * vol, t: S.now + 0.12, dest, send: 0.18 });
+    }
+
+    // estertor lento cuando esta a unos 10 u o menos
+    if (g.dist < 10) {
+      this.breathT -= dt;
+      if (this.breathT <= 0) {
+        this.breathT = lerp(3.4, 1.6, prox) * (0.9 + rnd() * 0.3);
+        S.noise({ kind: "pink", bp: 420, bp1: 1100, q: 2.2, dur: 0.9, a: 0.35, vol: 0.22 * vol, dest, send: 0.3 });
+        S.noise({ kind: "pink", bp: 900, bp1: 360, q: 2.4, dur: 0.8, a: 0.12, vol: 0.2 * vol, t: S.now + 0.85, dest, send: 0.3 });
+      }
+    }
+
+    // gruñido grave muy cerca
+    if (g.dist < 5) {
+      this.growlT -= dt;
+      if (this.growlT <= 0) {
+        this.growlT = 2.4 + rnd() * 1.6;
+        S.formantVoice({ t: S.now, f0: 62, f1: 44, dur: 1.1, vol: 0.34 * vol, a: 0.15, formants: [[260, 3.5, 1.4], [760, 4.5, 1.0]], dist: true, vibRate: 28, vibDepth: 70, noiseMix: 0.3, dest });
+      }
+    }
   }
 
   dispose(): void {

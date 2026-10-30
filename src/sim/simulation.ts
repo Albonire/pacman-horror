@@ -405,6 +405,7 @@ export class Simulation {
       if (g.dash > 0) g.dash -= dt;
       if (g.frozen) { g.refreshWorld(this.maze); continue; }
 
+      g.updateStealth(dt, this.diff.silentChance);
       // percepcion y memoria (ver u oir al jugador)
       if (g.mode === "scatter" || g.mode === "chase") noticePlayer(g, ctx, dt);
 

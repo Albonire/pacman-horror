@@ -439,6 +439,17 @@ export class GhostView {
     this.bodyMat.emissiveIntensity = phase === "frightened" ? 1.2 + blink * 2.2 : 1;
     if (phase === "frightened" && frightLow) this.bodyMat.color.set(blink ? 0xffffff : 0x3a4cc8);
 
+    // sombra: cuerpo negro sin cara ni brillo propio; solo los ojos delatan que mira
+    if (this.shadow) {
+      this.bodyMat.color.set(0x000000);
+      this.bodyMat.emissive.set(0x240508); // reborde rojo muy tenue: se adivina el contorno en la oscuridad
+      this.bodyMat.emissiveIntensity = 1;
+      this.patch.visible = false;
+      this.extras.visible = false;
+      this.lightIntensity = 0;
+      return;
+    }
+
     // luz deseada
     let li = 0;
     if (phase === "hunt") li = 5.5;
@@ -454,6 +465,15 @@ export class GhostView {
 
   /** Fuerza el modo grito (para el susto de muerte). */
   forceScream(): void { this.setPhase("hunt"); this.setMood("scream"); this.lightIntensity = 2.2; }
+
+  private shadow = false;
+
+  /** Silueta negra con solo los ojos visibles (aparicion "sombra" del director). */
+  setShadow(on: boolean): void {
+    if (on === this.shadow) return;
+    this.shadow = on;
+    if (!on) this.setPhase(this.phase, true); // restaura colores y cara
+  }
 
   /** Opacidad global (1 = solido). Se usa en las apariciones del director de sustos. */
   setGhostly(a: number): void {

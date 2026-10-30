@@ -213,7 +213,7 @@ const STOMACH: ThemeVisual = {
  * pocas luminarias vivas), mas luminarias muertas o rotas y mas niebla. Los valores de cada tema de arriba
  * son el punto de partida; aqui se aplica el mismo factor a todos para que la progresion entre niveles se conserve.
  */
-export const DARKEN = { fill: 0.5, fixture: 0.78, fog: 1.18, dead: 1.7, broken: 1.3, exposure: 0.92 };
+export const DARKEN = { fill: 0.62, fixture: 0.88, fog: 1.08, dead: 1.45, broken: 1.2, exposure: 0.95 };
 
 function darker(t: ThemeVisual): ThemeVisual {
   return {

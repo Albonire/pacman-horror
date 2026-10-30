@@ -3,6 +3,8 @@ import type { FaceKind } from "../gfx/faces";
 import type { GhostMode } from "../sim/ghost";
 
 export interface AudioGhost {
+  /** Se mueve en silencio: no hay pasos, ni respiracion, ni gruñido que lo delaten. */
+  silent?: boolean;
   kind: FaceKind;
   x: number;
   y: number;
@@ -78,6 +80,8 @@ export interface GameAudio {
   playWrap(): void;
   /** Susto de muerte: grito unico del fantasma. `gain` lo atenua segun el nivel de sustos. */
   playDeathScream(kind: FaceKind, gain?: number): void;
+  /** Ambiente del menu (bucle grabado): true en menu y ficha de nivel. */
+  setMenuBed?(on: boolean): void;
   playGameOver(): void;
   playUiClick(): void;
   /** Sustos ambientales. */

@@ -11,6 +11,9 @@
 //   rush        una figura aparece al fondo, aguarda y se lanza hacia la camara (no letal)
 //   peripheral  silueta en el borde del campo de vision que desaparece si la miras
 //   falseAlarm  pasos y arrastres que se acercan y no traen nada
+//   shadow      silueta negra que cruza un pasillo al fondo y se esfuma
+//   eyes        un par de ojos en la oscuridad que parpadea y se acerca a saltos mientras no se le mire
+//   glimpse     la cara de un fantasma durante unos fotogramas, tenue, casi subliminal
 //
 // Ritmo: calma larga -> silencio previo (el audio se atenua) -> golpe. El silencio es parte del susto.
 
@@ -20,6 +23,7 @@ import type { Simulation } from "../sim/simulation";
 import type { GhostLike, GhostView } from "./ghostView";
 import type { ScareSystem } from "./scare";
 import type { CameraRig } from "./rig";
+import type { EyesView } from "./eyesView";
 import type { Settings } from "./settings";
 import { CELL } from "../config/constants";
 
@@ -36,9 +40,10 @@ export interface DirectorHost {
   hudMessage: (t: string) => void;
   /** 0..1: cuan dentro de una zona oscura esta el jugador. */
   darkness: () => number;
+  eyes: EyesView;
 }
 
-type EventKind = "apparition" | "behind" | "blackout" | "bang" | "whisper" | "face" | "rush" | "peripheral" | "falseAlarm";
+type EventKind = "apparition" | "behind" | "blackout" | "bang" | "whisper" | "face" | "rush" | "peripheral" | "falseAlarm" | "shadow" | "eyes" | "glimpse";
 
 interface Active {
   kind: EventKind;
@@ -70,7 +75,8 @@ export class ScareDirector {
   }
 
   private endActive(): void {
-    if (this.fake) { this.fake.view.group.visible = false; this.fake = null; }
+    if (this.fake) { this.fake.view.setShadow(false); this.fake.view.group.visible = false; this.fake = null; }
+    this.h.eyes.setAlpha(0);
     this.active = null;
     this.lightsMul = 1;
     this.h.setLightsMul(1);
@@ -85,6 +91,8 @@ export class ScareDirector {
     if (s !== "reduced") w.push(["blackout", 12]);
     if (s === "full") w.push(["face", 6]);
     if (s !== "off") w.push(["rush", 9 * dark]);
+    w.push(["shadow", 13 * dark], ["eyes", 12 * dark * (this.h.darkness() > 0.4 ? 1.5 : 1)]);
+    if (s === "full") w.push(["glimpse", 9]);
     // evita repetir el mismo evento tres veces seguidas
     const filtered = w.filter(([k]) => !(this.recent.length >= 2 && this.recent[0] === k && this.recent[1] === k));
     const total = filtered.reduce((a, [, v]) => a + v, 0);
@@ -115,7 +123,7 @@ export class ScareDirector {
     this.recent.length = Math.min(this.recent.length, 3);
     const ghostKind = (Math.floor(Math.random() * 4)) as FaceKind;
     // silencio previo: el ambiente y la musica bajan antes de los sustos que se ven
-    if (kind === "apparition" || kind === "rush" || kind === "face" || kind === "peripheral" || kind === "behind") audio.duck?.(0.12, 1.8);
+    if (kind === "apparition" || kind === "rush" || kind === "face" || kind === "peripheral" || kind === "behind" || kind === "shadow" || kind === "eyes") audio.duck?.(0.12, 1.8);
     else if (kind === "falseAlarm") audio.duck?.(0.18, 3.2);
     switch (kind) {
       case "apparition": {
@@ -172,6 +180,23 @@ export class ScareDirector {
         this.begin({ kind, t: 0, data: { scrape: 0 } });
         break;
       }
+      case "shadow": {
+        // una celda visible delante y un vecino abierto hacia el que cruza (de lado a lado del pasillo)
+        const cell = this.findCell(8, 15, 0, 34);
+        const dir = cell ? this.openNeighbour(cell.x, cell.z) : null;
+        if (!cell || !dir) { this.nextAt = this.clock + 5; audio.duck?.(1, 0.1); return; }
+        this.begin({ kind, t: 0, data: { x: cell.x, z: cell.z, dx: dir[0], dz: dir[1], phase: 0 }, ghost: ghostKind });
+        break;
+      }
+      case "eyes": {
+        const cell = this.findCell(9, 15, 0, 30);
+        if (!cell) { this.nextAt = this.clock + 5; audio.duck?.(1, 0.1); return; }
+        this.begin({ kind, t: 0, data: { x: cell.x, z: cell.z, hops: 0, phase: 0, seen: 0 }, ghost: ghostKind });
+        break;
+      }
+      case "glimpse":
+        this.begin({ kind, t: 0, data: { fired: 0, n: 0 }, ghost: ghostKind });
+        break;
     }
   }
 
@@ -219,15 +244,30 @@ export class ScareDirector {
     return { deg: (Math.acos(Math.max(-1, Math.min(1, dot))) * 180) / Math.PI, dist: d };
   }
 
-  private show(kind: FaceKind, x: number, z: number): void {
+  /** Direccion cardinal (en mundo) hacia una celda vecina abierta y lateral a la linea de vision. */
+  private openNeighbour(x: number, z: number): [number, number] | null {
+    const m = this.h.sim.maze, p = this.h.sim.player;
+    const [cx, cy] = m.worldToCell(x, z);
+    const vx = x - p.x, vz = z - p.z, vl = Math.hypot(vx, vz) || 1;
+    let best: [number, number] | null = null, bestScore = 0.35; // exige un cruce claramente lateral
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      if (!m.inBounds(cx + dx, cy + dy) || !m.isWalkable(cx + dx, cy + dy)) continue;
+      const lateral = 1 - Math.abs((vx * dx + vz * dy) / vl);
+      if (lateral > bestScore) { bestScore = lateral; best = [dx, dy]; }
+    }
+    return best;
+  }
+
+  private show(kind: FaceKind, x: number, z: number, shadow = false): void {
     const view = this.h.apparition(kind);
+    view.setShadow(shadow);
     const g: GhostLike = { mode: "chase", x, z, yaw: 0, startled: false, frozen: true };
     view.group.visible = true;
     this.fake = { view, g };
   }
 
   private hide(): void {
-    if (this.fake) { this.fake.view.group.visible = false; this.fake = null; }
+    if (this.fake) { this.fake.view.setShadow(false); this.fake.view.group.visible = false; this.fake = null; }
   }
 
   private updateActive(dt: number): void {
@@ -359,6 +399,80 @@ export class ScareDirector {
       case "falseAlarm": {
         if (!a.data.scrape && a.t > 2.2) { a.data.scrape = 1; audio.playDread?.("scrape"); }
         if (a.t > 3.2) this.finish();
+        break;
+      }
+      case "shadow": {
+        const sx = a.data.x, sz = a.data.z;
+        if (a.data.phase === 0) {
+          // una luz titila y la silueta ya esta ahi
+          this.setMul(Math.sin(a.t * 60) > 0 ? 1 : 0.12);
+          if (a.t > 0.3) {
+            a.data.phase = 1; a.t = 0; this.setMul(0.6);
+            this.show(a.ghost!, sx, sz, true);
+            this.fake!.view.setGhostly(0.95);
+            audio.playFootsteps(sx, 0.1, sz);
+          }
+        } else if (a.data.phase === 1 && this.fake) {
+          // cruza una celda a paso lento, sin mirar, y se esfuma al llegar al otro lado
+          const g = this.fake.g;
+          const sp = 2.6 * dt;
+          g.x += a.data.dx * sp; g.z += a.data.dz * sp;
+          g.yaw = Math.atan2(a.data.dx, a.data.dz);
+          this.h.eyes.place(g.x, this.fake.view.faceY, g.z, p.x, p.z, a.ghost!);
+          this.h.eyes.setAlpha(1);
+          const { deg, dist } = this.angleToward(g.x, g.z);
+          if (deg < 12) this.lookT += dt; else this.lookT = 0;
+          const crossed = Math.hypot(g.x - sx, g.z - sz) >= CELL * 0.98;
+          const blocked = !this.h.sim.maze.rayClear(p.x, p.z, g.x, g.z);
+          if (crossed || blocked || dist < 4 || this.lookT > 0.9 || a.t > 3.4) {
+            this.hide();
+            this.h.eyes.setAlpha(0);
+            this.setMul(0.08);
+            a.data.phase = 2; a.t = 0;
+          }
+        } else if (a.t > 0.25) { this.setMul(1); this.finish(); }
+        break;
+      }
+      case "eyes": {
+        const E = this.h.eyes;
+        const x = a.data.x, z = a.data.z;
+        if (a.data.phase === 0) {
+          // los ojos se abren de golpe en la oscuridad
+          E.place(x, 1.12, z, p.x, p.z, a.ghost!);
+          E.setAlpha(Math.min(1, a.t / 0.35));
+          if (a.t > 0.5) { a.data.phase = 1; a.t = 0; audio.playDread?.("inhale"); }
+        } else if (a.data.phase === 1) {
+          const { deg, dist } = this.angleToward(E.group.position.x, E.group.position.z);
+          // parpadean de vez en cuando; si se les mira fijamente, se cierran y reaparecen mas cerca
+          const blink = Math.sin(a.t * 2.3) > 0.97 || (a.t % 1.6) > 1.53 ? 0 : 1;
+          E.setAlpha(blink);
+          if (deg < 18) a.data.seen += dt; else a.data.seen = Math.max(0, a.data.seen - dt * 0.5);
+          if (dist < 4.2 || a.t > 7) { E.setAlpha(0); audio.playWhisper(p.x + 0.3, 0.9, p.z); a.data.phase = 3; a.t = 0; }
+          else if (a.data.seen > 0.9 && a.data.hops < 3) {
+            // salto: se cierran un instante y vuelven 2,2 u mas cerca
+            E.setAlpha(0);
+            const dx = p.x - E.group.position.x, dz = p.z - E.group.position.z, d = Math.hypot(dx, dz) || 1;
+            a.data.x = E.group.position.x + (dx / d) * 2.2; a.data.z = E.group.position.z + (dz / d) * 2.2;
+            a.data.hops += 1; a.data.seen = 0; a.data.phase = 2; a.t = 0;
+          }
+        } else if (a.data.phase === 2) {
+          if (a.t > 0.28) {
+            E.place(a.data.x, 1.12, a.data.z, p.x, p.z, a.ghost!);
+            E.setAlpha(1);
+            audio.playScareHit(0.25 + a.data.hops * 0.15);
+            a.data.phase = 1; a.t = 0;
+          }
+        } else if (a.t > 0.4) { this.finish(); }
+        break;
+      }
+      case "glimpse": {
+        // 3 destellos tenues de una cara, cada uno de unos 90 ms, con el audio justo antes
+        if (a.t > 0.5 + a.data.n * 0.7 && a.data.n < 3) {
+          a.data.n += 1;
+          this.h.scare.flashFace(a.ghost!, 0.09, 0.38);
+          audio.playScareHit(0.45);
+        }
+        if (a.t > 2.6) this.finish();
         break;
       }
       case "bang":
