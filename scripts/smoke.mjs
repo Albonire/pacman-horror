@@ -152,16 +152,26 @@ try {
   const recovered = await page.waitForFunction(() => { const S = window.__umbral.audio.S; return S && S.ctx !== window.__ctxFailBefore && S.ctx.state === "running"; }, { timeout: 40000 }).then(() => true, () => false);
   check("si falla la creacion del contexto (2 veces) el audio se recupera solo", recovered, await page.evaluate(() => JSON.stringify(window.__umbral.audio.diag())));
 
-  // microcortes del reloj de audio (se para y se pone al dia, como en el registro de un equipo real): el buffer se amplia solo
-  // el contexto debe tener mas de 6 s (los primeros segundos no cuentan) y el reloj falso no puede dar tiempos negativos
+  // microcortes del reloj de audio (se para y se pone al dia, como en un equipo real): se cuentan y se anotan, pero el buffer no cambia solo
   await page.waitForFunction(() => window.__umbral.audio.S.ctx.currentTime > 8, { timeout: 30000, polling: 250 });
   await page.evaluate(() => {
     const c = window.__umbral.audio.S.ctx; window.__ctxChoppy = c;
     const get = Object.getOwnPropertyDescriptor(AudioContext.prototype, "currentTime") || Object.getOwnPropertyDescriptor(BaseAudioContext.prototype, "currentTime");
     Object.defineProperty(c, "currentTime", { get: () => Math.max(0, get.get.call(c) - (Math.floor(performance.now() / 1000) % 2 ? 0.3 : 0)), configurable: true });
   });
-  const widened = await page.waitForFunction(() => { const A = window.__umbral.audio; return A.S && A.S.ctx !== window.__ctxChoppy && A.S.ctx.state === "running" && A.diag().latency === 0.2; }, { timeout: 60000, polling: 500 }).then(() => true, () => false);
-  check("con microcortes del reloj de audio el buffer se amplia y se recuerda", widened && await page.evaluate(() => localStorage.getItem("umbral.audio.latency") === "0.2" && window.__umbral.audio.S.ctx.baseLatency > 0.1), await page.evaluate(() => JSON.stringify({ d: window.__umbral.audio.diag().latency, bl: window.__umbral.audio.S.ctx.baseLatency })));
+  const noted = await page.waitForFunction(() => window.__umbral.audio.diag().log.some((l) => l.includes("microcortes del reloj de audio")) || window.__umbral.audio.diag().hiccups >= 4, { timeout: 40000, polling: 500 }).then(() => true, () => false);
+  check("los microcortes del reloj de audio se cuentan y no cambian el buffer por su cuenta", noted && await page.evaluate(() => window.__umbral.audio.S.ctx === window.__ctxChoppy && window.__umbral.audio.diag().latency === "playback"), await page.evaluate(() => JSON.stringify({ h: window.__umbral.audio.diag().hiccups, l: window.__umbral.audio.diag().latency })));
+
+  // panel F9: el buffer de salida se elige a mano y se reconstruye el contexto con el
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "F9" })));
+  const pressBuf = (label) => page.evaluate((l) => { window.__ctxBefore2 = window.__umbral.audio.S.ctx; const b = [...document.querySelectorAll("[data-audio-log] button")].find((x) => x.textContent === l); if (b) b.click(); return !!b; }, label);
+  check("el panel F9 ofrece las opciones de buffer", await pressBuf("Buffer largo"));
+  const wide = await page.waitForFunction(() => window.__umbral.audio.S.ctx !== window.__ctxBefore2 && window.__umbral.audio.S.ctx.baseLatency > 0.1, { timeout: 30000, polling: 250 }).then(() => true, () => false);
+  check("Buffer largo reconstruye el contexto con mas latencia base y se recuerda", wide && await page.evaluate(() => localStorage.getItem("umbral.audio.latency.v2") === "0.2"));
+  await pressBuf("Buffer corto");
+  const shortb = await page.waitForFunction(() => window.__umbral.audio.S.ctx !== window.__ctxBefore2 && window.__umbral.audio.S.ctx.baseLatency < 0.05, { timeout: 30000, polling: 250 }).then(() => true, () => false);
+  check("Buffer corto vuelve al buffer pequeno y borra la preferencia", shortb && await page.evaluate(() => localStorage.getItem("umbral.audio.latency.v2") === null));
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "F9" })));
 
   // registro de vuelo: F9 abre el panel con lineas del contexto y se guarda para sobrevivir a una recarga
   await page.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "F9" })));

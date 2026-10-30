@@ -22,9 +22,10 @@ const MIX = {
   screamerFlash: 0.6, scareHit: 0.75, pickup: 0.5, switchOn: 0.6, hide: 0.7, dread: 0.6, flashlight: 0.6, fruit: 0.5, wake: 0.6, pant: 1.1,
 } as const;
 
-const LATENCY_KEY = "umbral.audio.latency";
-/** Buffer ampliado (s) al detectar microcortes del reloj de audio: Chrome lo recorta a su maximo (~0,17 a 0,19 s). */
-const LATENCY_WIDE = 0.2;
+/** Buffer elegido a mano desde el panel F9 (clave nueva: la automatica de la version anterior se ignora). */
+const LATENCY_KEY = "umbral.audio.latency.v2";
+/** Opciones del panel F9: nombre y `latencyHint` (Chrome recorta los numericos a ~0,17 a 0,19 s). */
+const LATENCY_CHOICES: [string, AudioContextLatencyCategory | number][] = [["Buffer corto", "playback"], ["Buffer medio", 0.1], ["Buffer largo", 0.2]];
 
 function loadLatency(): AudioContextLatencyCategory | number {
   try {
@@ -86,12 +87,14 @@ export class HorrorAudio implements GameAudio {
   private bornAt = 0;
   private stateChangedAt = 0;
   private visChangedAt = 0;
+  private lastChoppyNote = -100;
   private quietRebuilds = 0;
 
   /** `factory` y `assumeRunning` permiten pruebas con un OfflineAudioContext. */
   constructor(private factory?: () => AudioContext, private assumeRunning = false) {
     if (!this.assumeRunning && typeof window !== "undefined") {
       recorder.install();
+      recorder.actions = LATENCY_CHOICES.map(([label, hint]) => ({ label, run: () => this.setLatency(hint) }));
       this.bindEarlyGestures();
     }
   }
@@ -247,7 +250,7 @@ export class HorrorAudio implements GameAudio {
     }
     this.notRunningFor = 0; this.everRan = true;
     if (this.clockStalled(S)) { this.rebuild("el reloj de audio no avanza"); return; }
-    if (this.widenIfChoppy(S)) return;
+    this.noteChoppy(S);
     this.heal(S);
     // vacia los efectos que llegaron mientras el contexto estaba parado (si no son muy viejos)
     const now = performance.now();
@@ -322,22 +325,28 @@ export class HorrorAudio implements GameAudio {
     this.hiccups.push(wall);
   }
 
-  /** Cuatro saltos en un minuto con el buffer corto: se reconstruye con el buffer al maximo y se recuerda para la proxima vez. */
-  private widenIfChoppy(S: Synth): boolean {
+  /**
+   * Cuatro saltos en un minuto quedan anotados en el registro. No se cambia el buffer por cuenta propia: en un equipo
+   * real (PipeWire) el buffer largo subio la latencia de salida de ~0,07 s a ~0,53 s sin eliminar los saltos.
+   */
+  private noteChoppy(S: Synth): void {
     const wall = performance.now() / 1000;
     this.hiccups = this.hiccups.filter((t) => wall - t < 60);
-    if (this.hiccups.length < 4 || this.assumeRunning) return false;
-    const cur = typeof this.latency === "number" ? this.latency : 0;
-    if (cur >= LATENCY_WIDE) {
-      if (this.hiccups.length === 4) recorder.event(`microcortes con el buffer ya al maximo (base ${(S.ctx.baseLatency ?? 0).toFixed(3)} s)`);
-      return false;
-    }
-    const n = this.hiccups.length;
-    this.latency = LATENCY_WIDE;
-    try { localStorage.setItem(LATENCY_KEY, String(LATENCY_WIDE)); } catch { /* sin almacenamiento */ }
-    this.lastRebuild = -100; // esta reconstruccion no cuenta para el limite de frecuencia
-    this.rebuild(`${n} microcortes del reloj de audio en 60 s: buffer ampliado a ${LATENCY_WIDE} s`);
-    return true;
+    if (this.hiccups.length < 4 || wall - this.lastChoppyNote < 60) return;
+    this.lastChoppyNote = wall;
+    recorder.event(`microcortes del reloj de audio: ${this.hiccups.length} en 60 s (base ${(S.ctx.baseLatency ?? 0).toFixed(3)} s, salida ${((S.ctx as AudioContext & { outputLatency?: number }).outputLatency ?? 0).toFixed(3)} s)`);
+  }
+
+  /** Cambia el tamano de buffer de salida (panel F9) y reconstruye el contexto con el. Se recuerda para la proxima vez. */
+  setLatency(hint: AudioContextLatencyCategory | number): void {
+    this.latency = hint;
+    try {
+      if (hint === "playback") localStorage.removeItem(LATENCY_KEY);
+      else localStorage.setItem(LATENCY_KEY, String(hint));
+    } catch { /* sin almacenamiento */ }
+    recorder.event(`buffer elegido: ${hint}`);
+    this.lastRebuild = -100;
+    this.rebuild(`buffer de salida cambiado a ${hint}`);
   }
 
   /** Estado del audio para depuracion (`__umbral.audio.diag()` con `?debug`). */

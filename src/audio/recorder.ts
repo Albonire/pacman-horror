@@ -33,6 +33,8 @@ export class AudioRecorder {
   private body: HTMLPreElement | null = null;
   private refresh: number | null = null;
   private installed = false;
+  /** Botones extra del panel (el motor de audio registra aqui las opciones de buffer). */
+  actions: { label: string; run: () => void }[] = [];
 
   /** Engancha el observador de tareas largas, los eventos del documento y la tecla F9. Idempotente. */
   install(): void {
@@ -136,7 +138,15 @@ export class AudioRecorder {
       else this.fallbackCopy(txt, done);
     };
     close.onclick = () => this.close();
-    bar.append(title, copy, close);
+    bar.append(title);
+    for (const a of this.actions) {
+      const b = document.createElement("button");
+      b.textContent = a.label;
+      b.style.cssText = copy.style.cssText;
+      b.onclick = () => { a.run(); b.textContent = `${a.label} (aplicado)`; setTimeout(() => { b.textContent = a.label; }, 2500); };
+      bar.append(b);
+    }
+    bar.append(copy, close);
     const body = document.createElement("pre");
     body.style.cssText = "margin:0;flex:1;overflow:auto;white-space:pre-wrap;word-break:break-all;user-select:text";
     panel.append(bar, body);
