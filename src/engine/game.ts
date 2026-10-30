@@ -595,6 +595,7 @@ export class Game {
     this.cb.onSettings(this.settings);
   }
 
+  private beaconT = 3;
   private biteReq = false;
   private interactReq = false;
   private freezeHintShown = false;
@@ -757,6 +758,17 @@ export class Game {
     this.yawVel += ((p.yaw - yaw0) / Math.max(dt, 1e-3) - this.yawVel) * Math.min(1, dt * 12);
     this.pitchVel += ((this.rig.pitch - pitch0) / Math.max(dt, 1e-3) - this.pitchVel) * Math.min(1, dt * 12);
 
+    // pulso de la salida abierta cada 6 s, desde su direccion
+    this.beaconT -= dt;
+    if (this.beaconT <= 0) {
+      this.beaconT = 6;
+      const ed = this.exitDirection();
+      if (ed !== null) {
+        const w = sim.maze.cellToWorld(sim.maze.exit[0], sim.maze.exit[1]);
+        const dx = w.x - p.x, dz = w.z - p.z, d = Math.hypot(dx, dz) || 1;
+        this.audio.playBeacon(p.x + (dx / d) * 6, 1.2, p.z + (dz / d) * 6);
+      }
+    }
     const ih = sim.interactHint;
     const interactHint = ih === "hide" ? "E: esconderte" : ih === "switch" ? "E: encender la luz (hace ruido)" : ih === "leave" ? null : null; // dentro del armario la ayuda va en la etiqueta inferior, no en el centro
     if (this.input.needsLock && !this.input.locked) {
@@ -1285,6 +1297,18 @@ export class Game {
     fx.aberration = Math.max(fx.aberration, t * 0.25 + (this.time - this.lastWrapT < 0.25 ? 0.6 : 0));
   }
 
+  /** Angulo de la salida respecto a la mirada (null si no esta abierta, esta cerca o el jugador esta escondido). */
+  private exitDirection(): number | null {
+    const sim = this.sim;
+    if (!sim || !sim.exitUnlocked || sim.hidden || this.phase !== "playing") return null;
+    const w = sim.maze.cellToWorld(sim.maze.exit[0], sim.maze.exit[1]);
+    const dx = w.x - sim.player.x, dz = w.z - sim.player.z;
+    if (Math.hypot(dx, dz) < 6 * K.CELL) return null;
+    const f = this.rig.forward, fl = Math.hypot(f.x, f.z) || 1;
+    const fx = f.x / fl, fz = f.z / fl;
+    return Math.atan2(dx * -fz + dz * fx, dx * fx + dz * fz);
+  }
+
   private updateHud(): void {
     const sim = this.sim!;
     const p = sim.player;
@@ -1310,6 +1334,7 @@ export class Game {
       crosshair: this.rig.mode === "fp" && !sim.hidden,
       sonar: p.sonarOpen,
       exitOpen: sim.exitUnlocked,
+      exitDir: this.exitDirection(),
       fruitName: sim.fruit.active ? this.level.fruitName : null,
       muted: this.settings.muted,
     };

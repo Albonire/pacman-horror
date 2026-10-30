@@ -55,6 +55,8 @@ export interface HudState {
   crosshair: boolean;
   sonar: boolean;
   exitOpen: boolean;
+  /** Angulo (rad) de la salida respecto a donde miras (0 = delante, positivo = derecha); null si no hay que indicarla. */
+  exitDir: number | null;
   fruitName: string | null;
   muted: boolean;
 }

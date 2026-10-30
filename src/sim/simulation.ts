@@ -199,9 +199,35 @@ export class Simulation {
 
   // ---------------- ciclo de vida ----------------
 
+  /**
+   * Celda segura para reaparecer: la mas cercana (por pasillos) al lugar de la muerte que este a 8 celdas o mas de
+   * cualquier guarida de fantasma, fuera de las zonas oscuras y de la salida. Null si no hay ninguna.
+   */
+  safeRespawnCell(death: Cell): Cell | null {
+    const m = this.maze;
+    const field = m.distanceField([m.nearestWalkable(death)]);
+    let best: Cell | null = null, bd = Infinity;
+    for (let y = 0; y < m.H; y++) for (let x = 0; x < m.W; x++) {
+      if (!m.isWalkable(x, y)) continue;
+      const d = field[y * m.W + x];
+      if (d >= bd || d > 16) continue;
+      if (this.ghosts.some((g) => Math.hypot(g.spawn[0] - x, g.spawn[1] - y) < 8)) continue;
+      if (Math.hypot(m.exit[0] - x, m.exit[1] - y) < 3) continue;
+      const w = m.cellToWorld(x, y);
+      if (this.darknessAt(w.x, w.z) > 0.3) continue;
+      bd = d; best = [x, y];
+    }
+    return best;
+  }
+
   /** Coloca al jugador y deja a los fantasmas dormidos en su guarida. */
   respawnPlayer(first = false): void {
-    const [px, py] = this.layout.player;
+    // la primera vez, la salida del nivel; despues, la celda segura mas cercana a donde moriste
+    let [px, py] = this.layout.player;
+    if (!first) {
+      const safe = this.safeRespawnCell(this.maze.worldToCell(this.player.x, this.player.z));
+      if (safe) [px, py] = safe;
+    }
     const w = this.maze.cellToWorld(px, py);
     // mira hacia el pasillo abierto mas largo
     let bestDir: Cell = [0, -1], bestRun = -1;
@@ -210,7 +236,9 @@ export class Simulation {
       while (run < 12 && this.maze.isWalkable(px + d[0] * (run + 1), py + d[1] * (run + 1))) run++;
       if (run > bestRun) { bestRun = run; bestDir = d; }
     }
+    const keepBattery = this.player.battery;
     this.player.reset(w.x, w.z, Math.atan2(-bestDir[0], -bestDir[1]));
+    if (!first) this.player.battery = Math.max(keepBattery, K.BATTERY_MAX * 0.6);
     this.ctx.trail.clear();
     this.ctx.trail.push(this.time, w.x, w.z);
     depenetrate(this.maze, this.colliders, this.player, K.PLAYER_RADIUS);
@@ -478,7 +506,8 @@ export class Simulation {
           const distToPlayer = Math.hypot(g.x - this.player.x, g.z - this.player.z);
           if (distToPlayer < 9 && this.maze.rayClear(g.x, g.z, this.player.x, this.player.z, 0.35)) {
             // El fantasma tiene contacto visual: aceleracion depredadora que escala con la dificultad
-            const surge = 1 + 0.12 * (1 - this.diff.mistake);
+            // el impulso depredador crece con las tacticas de la dificultad: ninguno en Aprendiz, la mitad en Normal
+            const surge = 1 + 0.12 * (1 - this.diff.mistake) * ((this.diff.tactics ?? 2) / 2);
             speed *= surge;
           }
         }
@@ -745,6 +774,11 @@ export class Simulation {
         this.holdLock = true;
         this.emit({ type: "gasp" });
         const h = this.hidden!;
+        // el jadeo se oye: los fantasmas a menos de 8 celdas lo registran y vienen a mirar el armario
+        const pc = this.maze.worldToCell(p.x, p.z);
+        for (const g of this.ghosts) {
+          if (g.lethal && Math.hypot(g.cx - pc[0], g.cy - pc[1]) < 8) { g.lastSeen = [pc[0], pc[1]]; g.lostT = 0; this.hiddenSuspected = true; }
+        }
         const d0 = this.doorOf(h);
         for (const g of this.ghosts) {
           if (g.lethal && Math.hypot(g.x - d0.x, g.z - d0.z) < HIDE_SIGHT * 1.3) this.suspicion.set(g, Math.min(1, (this.suspicion.get(g) ?? 0) + HIDE_GASP));

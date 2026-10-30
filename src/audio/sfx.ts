@@ -219,6 +219,16 @@ export function deathScream(S: Synth, kind: FaceKind, gain = 1): void {
   beats.forEach((d, i) => S.tone({ f0: 54 - i * 3, f1: 30, t: tTail + d, dur: 0.22 + i * 0.03, vol: (0.62 - i * 0.1) * g, lp: 170, a: 0.01 }));
 }
 
+/** Pulso grave y calido que viene de la salida abierta (espacializado: indica la direccion). */
+export function beacon(S: Synth, x: number, y: number, z: number): void {
+  const p = S.panner(x, y, z, 3, 0.55);
+  p.connect(S.sfx);
+  const send = S.ctx.createGain(); send.gain.value = 0.5; p.connect(send); send.connect(S.reverbSend);
+  S.tone({ f0: 98, f1: 90, dur: 1.7, vol: 0.55, a: 0.2, lp: 700, dest: p });
+  S.tone({ f0: 147, f1: 140, dur: 1.4, vol: 0.28, a: 0.28, lp: 800, t: S.now + 0.12, dest: p });
+  S.tone({ f0: 196, dur: 1.1, vol: 0.12, a: 0.3, lp: 900, t: S.now + 0.3, dest: p });
+}
+
 /** Jadeo al quedarse sin aliento dentro del armario: una bocanada brusca y un golpe sordo de la caja. */
 export function gasp(S: Synth): void {
   S.noise({ kind: "pink", bp: 500, bp1: 1500, q: 1.6, dur: 0.42, a: 0.03, vol: 0.55 });

@@ -44,6 +44,11 @@ await page.setViewport({ width: 800, height: 450 });
 await page.evaluateOnNewDocument(() => {
   try { localStorage.setItem("umbral.settings.v1", JSON.stringify({ quality: "low" })); } catch { /* sin almacenamiento */ }
 });
+// cuenta las peticiones de pantalla completa (el navegador sin cabeza no concede pantalla completa real)
+await page.evaluateOnNewDocument(() => {
+  window.__fsCalls = 0;
+  Element.prototype.requestFullscreen = function () { window.__fsCalls++; return Promise.resolve(); };
+});
 const errors = [];
 page.on("console", (m) => { if (m.type() === "error") errors.push("consola: " + m.text()); });
 page.on("pageerror", (e) => errors.push("excepcion: " + (e.stack || e.message)));
@@ -79,14 +84,23 @@ try {
   await page.goto(`http://127.0.0.1:${port}/?debug`, { waitUntil: "load", timeout: 60000 });
   check("el motor arranca y llega al menu", await page.waitForFunction(() => window.__umbral && window.__umbral.phase === "menu", { timeout: 120000 }).then(() => true, () => false));
 
-  const warned = await clickText("ENTIENDO");
+  // clic real del raton (con pointerdown), como el de una persona
+  const rect = await page.evaluate(() => {
+    const el = [...document.querySelectorAll("button")].find((e) => e.textContent && e.textContent.includes("ENTIENDO"));
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  const warned = !!rect && (await page.mouse.click(rect.x, rect.y), true);
   check("la advertencia de contenido se acepta", warned);
+  check("el primer clic pide pantalla completa", await page.evaluate(() => window.__fsCalls) === 1, String(await page.evaluate(() => window.__fsCalls)));
   check("menu principal visible", await page.evaluate(() => document.body.innerText.includes("JUGAR")));
 
   check("pulsar JUGAR abre la dificultad", await clickText("JUGAR") && await page.evaluate(() => document.body.innerText.includes("PESADILLA")));
   check("elegir dificultad", await clickText("NORMAL"));
   check("DESCENDER carga el nivel y muestra la ficha", await clickText("DESCENDER") && await waitPhase("briefing"));
   check("ENTRAR comienza la partida", await clickText("ENTRAR") && await waitPhase("playing"));
+  check("la pantalla completa se pide una sola vez en toda la sesion", await page.evaluate(() => window.__fsCalls) === 1);
 
   // controles con teclado real
   await page.evaluate(() => { const g = window.__umbral; g.sim.player.invuln = 99; window.__t0 = { x: g.sim.player.x, z: g.sim.player.z }; });
@@ -110,6 +124,11 @@ try {
   check("un contexto de audio suspendido se reanuda solo", await page.waitForFunction(() => window.__umbral.audio.S.ctx.state === "running", { timeout: 15000 }).then(() => true, () => false));
   await page.evaluate(() => { window.__ctxBefore = window.__umbral.audio.S.ctx; window.__umbral.audio.S.master.disconnect(); });
   check("si el grafo se rompe (silencio absoluto) el audio se reconstruye", await page.waitForFunction(() => window.__umbral.audio.S && window.__umbral.audio.S.ctx !== window.__ctxBefore && window.__umbral.audio.S.ctx.state === "running", { timeout: 40000 }).then(() => true, () => false));
+
+  // un reloj de audio que deja de avanzar (el contexto dice "running") tambien se detecta y se reconstruye
+  const rebuilds0 = await page.evaluate(() => window.__umbral.audio.diag().rebuilds);
+  await page.evaluate(() => { const c = window.__umbral.audio.S.ctx; const t = c.currentTime; Object.defineProperty(c, "currentTime", { get: () => t, configurable: true }); });
+  check("un reloj de audio parado se detecta y se reconstruye", await page.waitForFunction((b) => window.__umbral.audio.diag().rebuilds > b && window.__umbral.audio.S.ctx.state === "running", { timeout: 40000 }, rebuilds0).then(() => true, () => false), await page.evaluate(() => JSON.stringify(window.__umbral.audio.diag())));
 
   // pausa y ajustes
   await page.keyboard.press("Escape");
@@ -144,6 +163,15 @@ try {
     return el ? el.style.opacity : "-";
   });
   check("el HUD muestra la vision por las ranuras", hideHud === "1", hideHud);
+
+  // contener el aliento con Espacio dentro del armario
+  const st0 = await page.evaluate(() => window.__umbral.sim.player.stamina);
+  await page.keyboard.down("Space");
+  const held = await page.waitForFunction(() => window.__umbral.sim.holdingBreath === true, { timeout: 15000 }).then(() => true, () => false);
+  await page.waitForFunction((t) => window.__umbral.sim.time >= t + 0.8, { timeout: 30000 }, await page.evaluate(() => window.__umbral.sim.time)).catch(() => {});
+  const st1 = await page.evaluate(() => window.__umbral.sim.player.stamina);
+  await page.keyboard.up("Space");
+  check("Espacio contiene el aliento dentro del armario y gasta aliento", held && st1 < st0, st0.toFixed(0) + " -> " + st1.toFixed(0));
 
   await page.keyboard.press("KeyE");
   check("E vuelve a salir del escondite", await page.waitForFunction(() => window.__umbral.sim.hidden === null, { timeout: 10000 }).then(() => true, () => false));
@@ -186,6 +214,14 @@ try {
   check("el screamer 2D se muestra durante la muerte", await page.waitForFunction(() => window.__scareSeen === true, { timeout: 60000 }).then(() => true, () => false));
   check("el grito del susto de muerte suena (pico de salida > 0,15)", await page.evaluate(() => window.__peak) > 0.15, String(await page.evaluate(() => window.__peak)));
   check("tras el susto se pierde una vida y se reaparece", await waitPhase("playing", 120000) && await page.evaluate(() => window.__umbral.sim.lives < window.__umbral.sim.diff.lives));
+
+  // flecha de la salida con la salida abierta y el jugador lejos
+  await page.evaluate(() => {
+    const s = window.__umbral.sim; s.player.invuln = 99; s.exitUnlocked = true; s.maze.exitUnlocked = true;
+    const w = s.maze.cellToWorld(s.layout.player[0], s.layout.player[1]);
+    s.player.x = w.x; s.player.z = w.z;
+  });
+  check("con la salida abierta aparece la flecha que la indica", await page.waitForFunction(() => document.querySelector('[data-hud="exitArrow"]')?.style.opacity === "1", { timeout: 40000 }).then(() => true, () => false));
 
   // victoria
   await page.evaluate(() => {

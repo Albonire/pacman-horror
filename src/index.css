@@ -273,6 +273,9 @@ kbd {
 .hud-msg[data-tone="good"] { color: var(--ok); }
 .hud-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 14px 26px; font-family: var(--display); font-size: 22px; letter-spacing: 0.14em; opacity: 0; transition: opacity 0.2s; background: rgba(0, 0, 0, 0.78); box-shadow: 0 0 30px 14px rgba(0, 0, 0, 0.78); }
 .hud-radar { position: absolute; right: 22px; bottom: 22px; width: 240px; height: 240px; opacity: 0; transition: opacity 0.12s; box-shadow: 0 0 28px 10px rgba(0, 0, 0, 0.9), 0 0 30px rgba(60, 160, 110, 0.25); background: #000; border-radius: 4px; overflow: hidden; }
+/* flecha de la salida abierta: tenue, verde, arriba del centro */
+.hud-exit { position: absolute; left: 50%; top: 96px; width: 38px; height: 38px; transform: translateX(-50%); opacity: 0; transition: opacity 0.4s; pointer-events: none; }
+.hud-exit i { position: absolute; inset: 0; background: rgba(57, 255, 106, 0.8); clip-path: polygon(50% 0, 100% 100%, 50% 72%, 0 100%); filter: drop-shadow(0 0 8px rgba(57, 255, 106, 0.7)); animation: pulseSoft 2.2s ease-in-out infinite; }
 /* reticula de mira en primera persona */
 .hud-cross { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; opacity: 0; transition: opacity 0.15s; }
 .hud-cross::before { content: ""; position: absolute; inset: 4px; border: 1px solid rgba(255, 240, 214, 0.5); border-radius: 50%; box-shadow: 0 0 6px rgba(0, 0, 0, 0.9); }

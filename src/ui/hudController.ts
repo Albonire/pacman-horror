@@ -23,7 +23,7 @@ export class HudController implements HudApi {
     this.root = root;
     for (const n of ["score", "high", "level", "nodes", "lives", "stamina", "battery", "bite", "staminaLabel", "batteryLabel",
       "power", "powerFill", "message", "hint", "radar", "popups", "vignette", "flash", "exit", "fruit", "mute", "cam",
-      "crosshair", "hide"]) {
+      "crosshair", "hide", "exitArrow"]) {
       this.el[n] = q(root, n);
     }
   }
@@ -85,6 +85,12 @@ export class HudController implements HudApi {
     this.set("holding", "hide", s.holding ? "1" : "0", (v) => { e.hide.dataset.holding = v; });
     // el miedo sube a saltos de 0,05 para no tocar el DOM en cada frame
     this.set("threat", "hide", (Math.round(s.hideThreat * 20) / 20).toFixed(2), (v) => { e.hide.style.setProperty("--threat", v); });
+    // flecha de la salida: se mueve a saltos de 3 grados
+    const ed = s.exitDir;
+    this.set("exitArrow", "exitArrow", ed === null ? "off" : String(Math.round((ed * 180) / Math.PI / 3) * 3), (v) => {
+      e.exitArrow.style.opacity = v === "off" ? "0" : "1";
+      if (v !== "off") e.exitArrow.style.transform = `translateX(-50%) rotate(${v}deg)`;
+    });
     this.set("mute", "mute", String(s.muted), (v) => { e.mute.style.opacity = v === "true" ? "1" : "0"; });
   }
 

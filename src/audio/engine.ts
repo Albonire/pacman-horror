@@ -343,6 +343,7 @@ export class HorrorAudio implements GameAudio {
   playBang(x: number, y: number, z: number): void { this.with((S) => fx.bang(S, x, y, z)); }
   playWhisper(x: number, y: number, z: number): void { this.with((S) => fx.whisper(S, x, y, z)); }
   playFootsteps(x: number, y: number, z: number): void { this.with((S) => fx.footsteps(S, x, y, z)); }
+  playBeacon(x: number, y: number, z: number): void { this.with((S) => fx.beacon(S, x, y, z), MIX.hide); }
   playBlackout(on: boolean): void { this.with((S) => fx.blackout(S, on)); }
   playScreamerFlash(): void { this.with((S) => fx.screamerFlash(S), MIX.screamerFlash); }
   duck(level: number, secs: number): void { this.S?.duck(level, secs); }

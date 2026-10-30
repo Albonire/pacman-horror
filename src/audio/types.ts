@@ -91,6 +91,8 @@ export interface GameAudio {
   playBang(x: number, y: number, z: number): void;
   playWhisper(x: number, y: number, z: number): void;
   playFootsteps(x: number, y: number, z: number): void;
+  /** Pulso de la salida abierta, desde la direccion de la salida. */
+  playBeacon(x: number, y: number, z: number): void;
   playBlackout(on: boolean): void;
   /** Efecto de screamer de flash (cara a pantalla completa). */
   playScreamerFlash(): void;
@@ -142,6 +144,7 @@ export class NullAudio implements GameAudio {
   playBang(): void {}
   playWhisper(): void {}
   playFootsteps(): void {}
+  playBeacon(): void {}
   playBlackout(): void {}
   playScreamerFlash(): void {}
   playHeartbeat(): void {}

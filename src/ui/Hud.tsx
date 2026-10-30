@@ -43,6 +43,7 @@ export const HudView = forwardRef<HTMLDivElement, { radarRef: React.RefObject<HT
 
       <div className="hud-msg" data-hud="message" />
       <div className="hud-hint" data-hud="hint" />
+      <div className="hud-exit" data-hud="exitArrow"><i /></div>
       <div className="hud-cross" data-hud="crosshair" />
       <div className="hud-hide" data-hud="hide"><span className="hud-hide-label"><span className="lab-idle">E: SALIR · ESPACIO: CONTENER EL ALIENTO</span><span className="lab-hold">CONTENIENDO EL ALIENTO</span></span></div>
       <div className="hud-radar" data-hud="radar"><canvas ref={radarRef} /></div>
