@@ -47,6 +47,12 @@ export class HorrorAudio implements GameAudio {
   private earlyBound = false;
   onStatus?: (msg: string) => void;
   lastPeak = 0;
+  // diagnostico del vigilante de reloj
+  private clockWall = 0;
+  private clockAudio = 0;
+  private stalledFor = 0;
+  private rebuilds = 0;
+  private lastReason = "";
 
   /** `factory` y `assumeRunning` permiten pruebas con un OfflineAudioContext. */
   constructor(private factory?: () => AudioContext, private assumeRunning = false) {
@@ -82,6 +88,7 @@ export class HorrorAudio implements GameAudio {
       this.S.setVolume(this.volume);
       this.S.setMuted(this.muted);
       this.startLayers();
+      this.watchState();
       this.startWatching();
     }
     this.suspended = false;
@@ -112,13 +119,22 @@ export class HorrorAudio implements GameAudio {
     });
   }
 
+  /** Si el navegador detiene el contexto por su cuenta, se intenta reanudar al instante (sin esperar al vigilante). */
+  private watchState(): void {
+    const ctx = this.S?.ctx;
+    if (!ctx || this.assumeRunning) return;
+    ctx.onstatechange = () => {
+      if (this.wantRunning && ctx.state !== "running" && ctx.state !== "closed" && this.S?.ctx === ctx) this.apply();
+    };
+  }
+
   private startWatching(): void {
     if (this.assumeRunning || typeof window === "undefined") return;
     if (this.watchdog === null) this.watchdog = window.setInterval(() => this.watch(), 1000);
     if (this.meterTimer === null) this.meterTimer = window.setInterval(() => this.meter(0.5), 500);
     if (!this.gestureBound) {
       this.gestureBound = true;
-      for (const ev of ["keydown", "pointerdown", "focus"]) window.addEventListener(ev, this.kick, true);
+      for (const ev of ["keydown", "pointerdown", "focus", "pageshow"]) window.addEventListener(ev, this.kick, true);
       document.addEventListener("visibilitychange", this.kick);
       document.addEventListener("pointerlockchange", this.kick);
     }
@@ -130,7 +146,7 @@ export class HorrorAudio implements GameAudio {
     this.watchdog = null; this.meterTimer = null;
     if (this.gestureBound) {
       this.gestureBound = false;
-      for (const ev of ["keydown", "pointerdown", "focus"]) window.removeEventListener(ev, this.kick, true);
+      for (const ev of ["keydown", "pointerdown", "focus", "pageshow"]) window.removeEventListener(ev, this.kick, true);
       document.removeEventListener("visibilitychange", this.kick);
       document.removeEventListener("pointerlockchange", this.kick);
     }
@@ -150,11 +166,39 @@ export class HorrorAudio implements GameAudio {
     if (!S || !this.wantRunning) return;
     const st = S.ctx.state as string;
     if (st === "closed") { this.rebuild("el contexto se cerro"); return; }
-    if (st !== "running") { this.apply(); return; }
+    if (st !== "running") { this.apply(); this.clockWall = 0; return; }
+    if (this.clockStalled(S)) { this.rebuild("el reloj de audio no avanza"); return; }
     // vacia los efectos que llegaron mientras el contexto estaba parado (si no son muy viejos)
     const now = performance.now();
     const todo = this.pending.splice(0);
     for (const e of todo) if (now - e.t < 1500) this.with(e.fn, e.mix);
+  }
+
+  /**
+   * El contexto puede decir "running" y no avanzar (cambio de dispositivo de salida, hilo de audio ahogado):
+   * el reloj del contexto debe avanzar casi al ritmo del reloj de pared. Tres segundos seguidos a menos de la
+   * mitad cuentan como parado y se reconstruye el grafo.
+   */
+  private clockStalled(S: Synth): boolean {
+    const wall = performance.now() / 1000, audio = S.ctx.currentTime;
+    if (this.clockWall > 0) {
+      const dw = wall - this.clockWall, da = audio - this.clockAudio;
+      // un hilo de temporizadores atrasado (pestana en segundo plano) infla dw: solo cuenta si el contexto no avanza casi nada
+      this.stalledFor = dw > 0.5 && da < dw * 0.5 ? this.stalledFor + dw : 0;
+    }
+    this.clockWall = wall; this.clockAudio = audio;
+    return this.stalledFor >= 3;
+  }
+
+  /** Estado del audio para depuracion (`__umbral.audio.diag()` con `?debug`). */
+  diag(): Record<string, unknown> {
+    const S = this.S;
+    return {
+      state: S?.ctx.state ?? "sin contexto", clock: S ? +S.ctx.currentTime.toFixed(2) : 0,
+      baseLatency: S ? +(S.ctx.baseLatency ?? 0).toFixed(4) : 0, live: S?.live ?? 0,
+      wantRunning: this.wantRunning, suspended: this.suspended, rebuilds: this.rebuilds, lastReason: this.lastReason,
+      peak: +this.lastPeak.toFixed(3), stalledFor: +this.stalledFor.toFixed(1), pending: this.pending.length,
+    };
   }
 
   /** Mide la salida: NaN/Inf o silencio absoluto sostenido significan que el grafo se rompio. */
@@ -183,6 +227,8 @@ export class HorrorAudio implements GameAudio {
     if (now - this.lastRebuild < 8) return;
     this.lastRebuild = now;
     console.warn(`[audio] reiniciando: ${reason}`);
+    this.rebuilds++; this.lastReason = reason;
+    this.clockWall = 0; this.stalledFor = 0;
     const old = this.S;
     this.S = null;
     this.ambience = null; this.drone = null; this.siren = null; this.dread = null;
@@ -195,6 +241,7 @@ export class HorrorAudio implements GameAudio {
     this.S.setVolume(this.volume);
     this.S.setMuted(this.muted);
     this.startLayers();
+    this.watchState();
     this.apply();
     this.onStatus?.("Audio reiniciado");
   }
@@ -245,7 +292,7 @@ export class HorrorAudio implements GameAudio {
       this.dread?.update({ dt: f.dt, tension: f.tension, chasing: f.chasing, intensity: f.dread * (1 + f.darkness * 1.2), listener: { x: f.listener.x, z: f.listener.z, fx: f.listener.fx, fz: f.listener.fz } });
       this.breath.update(S, f.dt, {
         exertion: f.exertion, tension: f.tension, running: f.running, exhausted: f.exhausted,
-        hidden: f.hidden, hiddenNearGhost: f.hiddenNearGhost,
+        hidden: f.hidden, hiddenNearGhost: f.hiddenNearGhost, holding: f.holding,
       });
     }
     for (const g of f.ghosts) {
@@ -296,12 +343,14 @@ export class HorrorAudio implements GameAudio {
   playBang(x: number, y: number, z: number): void { this.with((S) => fx.bang(S, x, y, z)); }
   playWhisper(x: number, y: number, z: number): void { this.with((S) => fx.whisper(S, x, y, z)); }
   playFootsteps(x: number, y: number, z: number): void { this.with((S) => fx.footsteps(S, x, y, z)); }
+  playBeacon(x: number, y: number, z: number): void { this.with((S) => fx.beacon(S, x, y, z), MIX.hide); }
   playBlackout(on: boolean): void { this.with((S) => fx.blackout(S, on)); }
   playScreamerFlash(): void { this.with((S) => fx.screamerFlash(S), MIX.screamerFlash); }
   duck(level: number, secs: number): void { this.S?.duck(level, secs); }
   playPickup(): void { this.with((S) => fx.pickup(S), MIX.pickup); }
   playSwitch(): void { this.with((S) => fx.switchOn(S), MIX.switchOn); }
   playHide(inside: boolean): void { this.with((S) => fx.hide(S, inside), MIX.hide); }
+  playGasp(): void { this.with((S) => fx.gasp(S), MIX.hide); }
   playHeartbeat(strength: number): void { this.with((S) => fx.heartbeat(S, strength), MIX.heartbeat); }
   playScareHit(strength: number): void { this.with((S) => fx.scareHit(S, strength), MIX.scareHit); }
   playDread(kind: string): void {

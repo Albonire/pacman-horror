@@ -21,12 +21,7 @@ function lockerTexture(): THREE.CanvasTexture {
     ctx.fillStyle = `rgba(${90 + Math.random() * 50},${40 + Math.random() * 20},10,${Math.random() * 0.18})`;
     ctx.beginPath(); ctx.ellipse(Math.random() * W, Math.random() * H, 3 + Math.random() * 14, 2 + Math.random() * 20, 0, 0, Math.PI * 2); ctx.fill();
   }
-  // ranuras de ventilacion
-  for (let i = 0; i < 9; i++) {
-    const y = 30 + i * 9;
-    ctx.fillStyle = "#050504"; ctx.fillRect(26, y, W - 52, 4);
-    ctx.fillStyle = "rgba(255,255,255,0.08)"; ctx.fillRect(26, y + 4, W - 52, 1);
-  }
+  // (las ranuras de ventilacion son listones 3D reales en la puerta: ya no se pintan)
   // marco, manija y abolladuras
   ctx.strokeStyle = "rgba(0,0,0,0.7)"; ctx.lineWidth = 4; ctx.strokeRect(2, 2, W - 4, H - 4);
   ctx.fillStyle = "#1a1a17"; ctx.fillRect(W - 30, H * 0.52, 8, 34);
@@ -39,7 +34,6 @@ export class InteractViews {
   readonly group = new THREE.Group();
   private batteryMeshes: THREE.Group[] = [];
   private lamps: { mat: THREE.MeshBasicMaterial; zone: number }[] = [];
-  private lockerDoors: THREE.Mesh[] = [];
 
   constructor(private sim: Simulation) {
     const batMat = new THREE.MeshStandardMaterial({ color: 0x2c3a1e, emissive: 0x6dff5a, emissiveIntensity: 1.1, roughness: 0.4, metalness: 0.4 });
@@ -76,24 +70,52 @@ export class InteractViews {
       this.lamps.push({ mat: lampMat, zone: sw.zone });
     }
 
-    // armarios
+    // armarios: caja hueca (se ve el interior desde dentro) con puerta de listones reales
     const tex = lockerTexture();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x23251f, roughness: 0.7, metalness: 0.4 });
+    const shellMat = new THREE.MeshStandardMaterial({ color: 0x14150f, roughness: 0.8, metalness: 0.35 });
+    const outerMat = new THREE.MeshStandardMaterial({ color: 0x23251f, roughness: 0.7, metalness: 0.4 });
     const doorMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.55, metalness: 0.5 });
+    const slatMat = new THREE.MeshStandardMaterial({ color: 0x3a3e37, roughness: 0.5, metalness: 0.6 });
+    const handleMat = new THREE.MeshStandardMaterial({ color: 0x1a1a17, roughness: 0.4, metalness: 0.7 });
+    const box = (m: THREE.Material, bw: number, bh: number, bd: number, x: number, y: number, z: number): THREE.Mesh => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), m);
+      mesh.position.set(x, y, z);
+      return mesh;
+    };
     for (const h of sim.hideSpots) {
-      const w = 0.95, d = 0.6, ht = 2.1;
+      const w = 0.95, d = 0.6, ht = 2.1, t = 0.03;
       const g = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.BoxGeometry(w, ht, d), bodyMat);
-      body.position.y = ht / 2;
-      const door = new THREE.Mesh(new THREE.BoxGeometry(w - 0.06, ht - 0.1, 0.04), doorMat);
-      door.position.set(0, ht / 2, d / 2 + 0.02);
-      g.add(body, door);
+      // paredes del interior (oscuras): atras, laterales, techo y suelo; sin cara frontal
+      g.add(
+        box(shellMat, w, ht, t, 0, ht / 2, -d / 2 + t / 2),
+        box(outerMat, t, ht, d, -w / 2 + t / 2, ht / 2, 0),
+        box(outerMat, t, ht, d, w / 2 - t / 2, ht / 2, 0),
+        box(outerMat, w, t, d, 0, ht - t / 2, 0),
+        box(shellMat, w, t, d, 0, t / 2, 0),
+      );
+      // percha para dar vida al interior
+      g.add(box(handleMat, w - 0.1, 0.02, 0.02, 0, ht - 0.25, -0.05));
+      // puerta: marco macizo arriba y abajo, y una zona de listones a la altura de los ojos
+      const dz = d / 2 + 0.02, dw = w - 0.04;
+      const louverLo = 0.4, louverHi = 1.36;
+      g.add(
+        box(doorMat, dw, louverLo, 0.04, 0, louverLo / 2, dz),
+        box(doorMat, dw, ht - 0.06 - louverHi, 0.04, 0, louverHi + (ht - 0.06 - louverHi) / 2, dz),
+        box(slatMat, 0.05, louverHi - louverLo, 0.04, -dw / 2 + 0.025, (louverLo + louverHi) / 2, dz),
+        box(slatMat, 0.05, louverHi - louverLo, 0.04, dw / 2 - 0.025, (louverLo + louverHi) / 2, dz),
+      );
+      const n = 10, step = (louverHi - louverLo) / n;
+      for (let i = 0; i < n; i++) {
+        const slat = box(slatMat, dw - 0.1, 0.034, 0.015, 0, louverLo + step * (i + 0.5), dz + 0.005);
+        slat.rotation.x = -0.38;
+        g.add(slat);
+      }
+      g.add(box(handleMat, 0.03, 0.2, 0.04, dw / 2 - 0.1, 1.05 - 0.35, dz + 0.04));
       const nx = -h.wall[0], nz = -h.wall[1];
       const px = h.x + h.wall[0] * (CELL / 2 - d / 2 - 0.02), pz = h.z + h.wall[1] * (CELL / 2 - d / 2 - 0.02);
       g.position.set(px, 0, pz);
       g.rotation.y = Math.atan2(nx, nz);
       this.group.add(g);
-      this.lockerDoors.push(door);
       // colision solo del cuerpo, pegado a la pared
       const alongX = h.wall[1] !== 0;
       const hx = (alongX ? w : d) / 2, hz = (alongX ? d : w) / 2;
@@ -115,6 +137,6 @@ export class InteractViews {
       const blink = on ? 1 : 0.35 + 0.65 * (Math.sin(time * 3.2 + l.zone) > 0.2 ? 1 : 0);
       l.mat.color.set(on ? 0x6aff7a : 0xff2a1a).multiplyScalar(2.2 * blink);
     }
-    this.lockerDoors.forEach((d, i) => { d.visible = i !== hiddenIndex; });
+    void hiddenIndex; // la puerta siempre esta cerrada: desde dentro se ve a traves de los listones
   }
 }

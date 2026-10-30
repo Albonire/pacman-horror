@@ -55,6 +55,14 @@ export class GhostSim {
   /** True si el ultimo contacto fue visual (sin error de giro y con embestida segura). */
   sawPlayer = false;
 
+  // revision de armarios cerca de donde perdio al jugador
+  /** Indice del escondite que va a revisar (-1 ninguno). */
+  checkSpot = -1;
+  /** Segundos que lleva mirando dentro del armario. */
+  checkT = 0;
+  /** Instante de simulacion de la ultima revision de cada escondite (para no repetirlos enseguida). */
+  checkedAt: number[] = [];
+
   // sigilo: a veces el fantasma se acerca sin hacer ruido (y sin avisar con el pulso del jugador)
   /** True mientras este fantasma se mueve en silencio. */
   silent = false;

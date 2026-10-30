@@ -17,6 +17,10 @@ export interface Settings {
   controlMode: ControlMode;
   brightness: number; // 0.7 .. 1.6
   muted: boolean;
+  /** Pide pantalla completa con el primer clic o toque dentro del juego. */
+  fullscreen: boolean;
+  /** Baja la resolucion de render solo cuando el equipo no da los fps. */
+  dynamicRes: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -30,6 +34,8 @@ export const DEFAULT_SETTINGS: Settings = {
   controlMode: "mouse",
   brightness: 1,
   muted: false,
+  fullscreen: true,
+  dynamicRes: true,
 };
 
 export interface Progress {
@@ -85,6 +91,8 @@ export function sanitizeSettings(s: Settings): Settings {
     scares: (["full", "reduced", "nofullscreen", "off"] as const).includes(s.scares) ? s.scares : "full",
     quality: (["high", "medium", "low"] as const).includes(s.quality) ? s.quality : "high",
     controlMode: s.controlMode === "keyboard" ? "keyboard" : "mouse",
+    fullscreen: s.fullscreen !== false,
+    dynamicRes: s.dynamicRes !== false,
   };
 }
 

@@ -38,6 +38,8 @@ export interface AudioFrame {
   hidden?: boolean;
   /** True si un fantasma peligroso esta cerca del escondite. */
   hiddenNearGhost?: boolean;
+  /** Contiene la respiracion: no suena la respiracion, solo el corazon. */
+  holding?: boolean;
   /** True durante la secuencia de muerte: se corta la respiracion para dejar silencio real. */
   dead?: boolean;
 }
@@ -89,6 +91,8 @@ export interface GameAudio {
   playBang(x: number, y: number, z: number): void;
   playWhisper(x: number, y: number, z: number): void;
   playFootsteps(x: number, y: number, z: number): void;
+  /** Pulso de la salida abierta, desde la direccion de la salida. */
+  playBeacon(x: number, y: number, z: number): void;
   playBlackout(on: boolean): void;
   /** Efecto de screamer de flash (cara a pantalla completa). */
   playScreamerFlash(): void;
@@ -96,6 +100,8 @@ export interface GameAudio {
   playPickup(): void;
   playSwitch(): void;
   playHide(inside: boolean): void;
+  /** Jadeo al agotar el aliento dentro del armario. */
+  playGasp(): void;
   /** Golpe de susto sincronizado con un destello de screamer. */
   playScareHit(strength: number): void;
   /** Fuerza un sonido de pavor concreto (depuracion y pruebas). */
@@ -138,12 +144,14 @@ export class NullAudio implements GameAudio {
   playBang(): void {}
   playWhisper(): void {}
   playFootsteps(): void {}
+  playBeacon(): void {}
   playBlackout(): void {}
   playScreamerFlash(): void {}
   playHeartbeat(): void {}
   playPickup(): void {}
   playSwitch(): void {}
   playHide(): void {}
+  playGasp(): void {}
   playScareHit(): void {}
   playDread(): void {}
   dispose(): void {}

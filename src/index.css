@@ -273,17 +273,26 @@ kbd {
 .hud-msg[data-tone="good"] { color: var(--ok); }
 .hud-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 14px 26px; font-family: var(--display); font-size: 22px; letter-spacing: 0.14em; opacity: 0; transition: opacity 0.2s; background: rgba(0, 0, 0, 0.78); box-shadow: 0 0 30px 14px rgba(0, 0, 0, 0.78); }
 .hud-radar { position: absolute; right: 22px; bottom: 22px; width: 240px; height: 240px; opacity: 0; transition: opacity 0.12s; box-shadow: 0 0 28px 10px rgba(0, 0, 0, 0.9), 0 0 30px rgba(60, 160, 110, 0.25); background: #000; border-radius: 4px; overflow: hidden; }
+/* flecha de la salida abierta: tenue, verde, arriba del centro */
+.hud-exit { position: absolute; left: 50%; top: 96px; width: 38px; height: 38px; transform: translateX(-50%); opacity: 0; transition: opacity 0.4s; pointer-events: none; }
+.hud-exit i { position: absolute; inset: 0; background: rgba(57, 255, 106, 0.8); clip-path: polygon(50% 0, 100% 100%, 50% 72%, 0 100%); filter: drop-shadow(0 0 8px rgba(57, 255, 106, 0.7)); animation: pulseSoft 2.2s ease-in-out infinite; }
 /* reticula de mira en primera persona */
 .hud-cross { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; opacity: 0; transition: opacity 0.15s; }
 .hud-cross::before { content: ""; position: absolute; inset: 4px; border: 1px solid rgba(255, 240, 214, 0.5); border-radius: 50%; box-shadow: 0 0 6px rgba(0, 0, 0, 0.9); }
 .hud-cross::after { content: ""; position: absolute; left: 50%; top: 50%; width: 2px; height: 2px; margin: -1px 0 0 -1px; border-radius: 50%; background: rgba(255, 244, 220, 0.9); box-shadow: 0 0 4px #000; }
 /* vision por las ranuras del armario */
-.hud-hide { position: absolute; inset: 0; z-index: 0; opacity: 0; transition: opacity 0.22s; pointer-events: none;
-  background:
-    radial-gradient(ellipse at 50% 50%, transparent 32%, rgba(0, 0, 0, 0.6) 100%),
-    repeating-linear-gradient(180deg, rgba(2, 2, 3, 0.98) 0 2.8vh, rgba(2, 2, 3, 0.5) 3.1vh 4vh, rgba(2, 2, 3, 0.98) 4.3vh 6.9vh);
+/* dentro del armario: los listones de la puerta son geometria real; aqui solo queda el viñeteado y el pulso del miedo */
+.hud-hide { position: absolute; inset: 0; z-index: 0; opacity: 0; transition: opacity 0.22s; pointer-events: none; --threat: 0;
+  background: radial-gradient(ellipse at 50% 50%, transparent 40%, rgba(0, 0, 0, 0.55) 100%);
 }
-.hud-hide-label { position: absolute; left: 50%; bottom: 11%; transform: translateX(-50%); font-family: var(--display); font-size: 15px; letter-spacing: 0.3em; color: rgba(255, 240, 214, 0.55); text-shadow: 0 0 12px #000, 0 1px 4px #000; animation: pulseSoft 2.4s ease-in-out infinite; }
+.hud-hide::after { content: ""; position: absolute; inset: 0;
+  box-shadow: inset 0 0 calc(70px + var(--threat) * 150px) calc(var(--threat) * 30px) rgba(0, 0, 0, calc(0.45 + var(--threat) * 0.5));
+  animation: hidePulse calc(1.9s - var(--threat) * 1.2s) ease-in-out infinite; }
+@keyframes hidePulse { 0%, 100% { opacity: 0.55; } 45% { opacity: 1; } 60% { opacity: 0.7; } }
+.hud-hide-label { position: absolute; left: 50%; bottom: 4%; transform: translateX(-50%); font-family: var(--display); font-size: 13px; letter-spacing: 0.22em; color: rgba(255, 240, 214, 0.55); text-shadow: 0 0 12px #000, 0 1px 4px #000; animation: pulseSoft 2.4s ease-in-out infinite; text-align: center; white-space: nowrap; }
+.hud-hide .lab-hold { display: none; }
+.hud-hide[data-holding="1"] .lab-idle { display: none; }
+.hud-hide[data-holding="1"] .lab-hold { display: inline; color: rgba(190, 220, 255, 0.8); }
 .hud-radar canvas { width: 100%; height: 100%; image-rendering: pixelated; }
 .hud-popup { position: absolute; transform: translate(-50%, -50%); font-family: var(--crt); font-weight: 400; letter-spacing: 0.1em; animation: popUp 1.2s ease-out forwards; text-shadow: 0 0 10px #000, 0 2px 4px #000; }
 .hud-popup-points { color: #cfe0ff; font-size: 28px; }

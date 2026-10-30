@@ -21,6 +21,8 @@ export class CameraRig {
   trauma = 0;
   roll = 0;
   fovPunch = 0;
+  /** 0..1: cuanto de metido esta en un armario (suaviza el estrechamiento del campo de vision). */
+  private hideK = 0;
   private bobPhase = 0;
   private bobAmp = 0;
   private breath = 0;
@@ -55,6 +57,7 @@ export class CameraRig {
     this.trauma = Math.max(0, this.trauma - dt * 1.6);
     this.fovPunch *= Math.exp(-dt * 6);
     const cam = this.camera;
+    this.hideK += ((this.forceFp ? 1 : 0) - this.hideK) * Math.min(1, dt * 4);
 
     // balanceo: sigue la distancia recorrida
     const target = this.headBob ? Math.min(1, p.speed / K.PLAYER_RUN) : 0;
@@ -83,7 +86,8 @@ export class CameraRig {
     }
 
     const yaw = p.viewYaw + sx;
-    const pitch = this.pitch + sy;
+    // dentro del armario se respira despacio y la vista se mece un poco
+    const pitch = this.pitch + sy + Math.sin(this.time * 0.9) * 0.006 * this.hideK;
     const rx = Math.cos(p.viewYaw), rz = -Math.sin(p.viewYaw);
 
     if (this.mode === "fp" || this.forceFp) {
@@ -98,7 +102,7 @@ export class CameraRig {
     }
 
     // FOV: base + correr - tension + golpe
-    const fov = this.vfov(this.baseFov + (p.running ? 6 : 0) - opts.tension * 3 + this.fovPunch);
+    const fov = this.vfov(this.baseFov + (p.running ? 6 : 0) - opts.tension * 3 + this.fovPunch - 16 * this.hideK);
     if (Math.abs(cam.fov - fov) > 0.01) {
       cam.fov += (fov - cam.fov) * Math.min(1, dt * 7);
       cam.updateProjectionMatrix();

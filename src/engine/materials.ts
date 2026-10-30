@@ -72,14 +72,15 @@ export function surfaceMaterial(
   extra: THREE.MeshStandardMaterialParameters = {},
   macro?: MacroOpts,
   normalScale = 1,
+  /** Calidad baja: sin mapa normal ni de rugosidad (dos lecturas de textura menos por fragmento) y sin ruido de detalle. */
+  lite = false,
 ): THREE.MeshStandardMaterial {
   for (const tex of [t.map, t.normal, t.rough]) tex.repeat.set(repeat[0], repeat[1]);
   const m = new THREE.MeshStandardMaterial({
     map: t.map,
-    normalMap: t.normal,
+    ...(lite ? {} : { normalMap: t.normal, roughnessMap: t.rough }),
     normalScale: new THREE.Vector2(normalScale, normalScale),
-    roughnessMap: t.rough,
-    roughness: 1,
+    roughness: lite ? 0.85 : 1,
     metalness: 0,
     ...extra,
   });
@@ -89,7 +90,7 @@ export function surfaceMaterial(
     if (!extra.emissive) m.emissive = new THREE.Color(0xffffff);
     if (extra.emissiveIntensity === undefined) m.emissiveIntensity = 1.2;
   }
-  if (macro) addMacroVariation(m, macro);
+  if (macro) addMacroVariation(m, lite ? { ...macro, detail: 0 } : macro);
   return m;
 }
 

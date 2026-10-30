@@ -40,17 +40,26 @@ describe("zonas oscuras, pilas, escondites e interruptores", () => {
     expect(sim.player.flashlightOn).toBe(true);
   });
 
-  it("un fantasma pegado al escondite lo descubre (rng bajo) o desiste (rng alto)", () => {
-    for (const [rv, caught] of [[0.1, true], [0.9, false]] as const) {
-      const sim = mk(() => rv); quietGhosts(sim);
+  it("un fantasma encima del armario lo descubre; uno lejano que solo pasa de largo no", () => {
+    for (const [dist, caught] of [[0.4, true], [2.3, false]] as const) {
+      const sim = mk(); quietGhosts(sim);
       const h = sim.hideSpots[0];
       sim.player.x = h.x; sim.player.z = h.z; sim.player.invuln = 0;
       sim.update(DT, { ...NO_INPUT, interact: true });
       const g = sim.ghosts[0];
-      g.cx = h.cell[0]; g.cy = h.cell[1]; g.mode = "chase"; g.p = 0; g.moving = false; g.refreshWorld(sim.maze);
+      const door = { x: h.x + h.wall[0] * 0.56, z: h.z + h.wall[1] * 0.56 };
+      // se coloca a lo largo del pasillo (perpendicular a la pared del armario)
+      const perp: [number, number] = [-h.wall[1], h.wall[0]];
+      const sign = [1, -1].find((sg) => sim.maze.rayClear(door.x, door.z, door.x + perp[0] * sg * dist, door.z + perp[1] * sg * dist)) ?? 1;
       sim.waveMode = "chase"; sim.waveTimer = 1e9;
-      for (let i = 0; i < 60 * 3 && sim.state === "playing"; i++) { g.mode = "chase"; g.cx = h.cell[0]; g.cy = h.cell[1]; g.p = 0; g.moving = false; g.refreshWorld(sim.maze); sim.update(DT, NO_INPUT); }
-      expect(sim.state === "caught", `rng ${rv}`).toBe(caught);
+      for (let i = 0; i < 60 * 3 && sim.state === "playing"; i++) {
+        const cc = sim.maze.cellToWorld(h.cell[0], h.cell[1]);
+        g.mode = "chase"; g.p = 0; g.moving = false; g.cx = h.cell[0]; g.cy = h.cell[1];
+        g.offX = door.x + perp[0] * sign * dist - cc.x; g.offZ = door.z + perp[1] * sign * dist - cc.z;
+        g.refreshWorld(sim.maze); g.yaw = Math.atan2(door.x - g.x, door.z - g.z);
+        sim.update(DT, NO_INPUT);
+      }
+      expect(sim.state === "caught", `distancia ${dist}`).toBe(caught);
     }
   });
 
@@ -107,8 +116,8 @@ describe("zonas oscuras, pilas, escondites e interruptores", () => {
     // Avanzamos unos frames: el fantasma debe detectar que esta cerca y detener su velocidad a 0 para registrar
     sim.update(DT, NO_INPUT);
     expect(g.speedCells).toBe(0);
-    // Tras la duracion de inspeccion con rng bajo, atrapa al jugador
-    for (let i = 0; i < 60 * 2.5 && sim.state === "playing"; i++) {
+    // la sospecha sube cada segundo con el fantasma encima de la puerta hasta que abre el armario
+    for (let i = 0; i < 60 * 6 && sim.state === "playing"; i++) {
       sim.update(DT, NO_INPUT);
     }
     expect(sim.state).toBe("caught");

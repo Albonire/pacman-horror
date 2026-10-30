@@ -15,8 +15,9 @@ export class BreathEngine {
   private timer = 1.2;
   private level = 0.1;
 
-  update(S: Synth, dt: number, st: { exertion: number; tension: number; running: boolean; exhausted: boolean; hidden?: boolean; hiddenNearGhost?: boolean }): void {
+  update(S: Synth, dt: number, st: { exertion: number; tension: number; running: boolean; exhausted: boolean; hidden?: boolean; hiddenNearGhost?: boolean; holding?: boolean }): void {
     if (st.hidden) {
+      if (st.holding) { this.timer = 1.2; return; } // contiene el aliento: ni un soplo
       const fear = st.hiddenNearGhost ? 0.95 : clamp(st.tension * 0.8 + 0.35, 0.3, 0.9);
       this.level += (fear - this.level) * Math.min(1, dt * 2.5);
       this.timer -= dt;
@@ -106,6 +107,8 @@ export class GhostVoice {
 
   update(dt: number, g: AudioGhost, _tension: number): void {
     const S = this.S;
+    // lejos y en silencio no hay nada que mover: ahorra automatizacion de parametros
+    if (g.dist > 16 && this.loud < 0.08) { this.loud = 0; return; }
     S.setPannerPos(this.panner, g.x, g.y, g.z);
     const hunting = (g.mode === "chase" || g.mode === "scatter") && !g.frozen;
     const want = hunting && !g.silent ? 1 : 0;

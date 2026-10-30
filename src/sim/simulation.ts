@@ -53,7 +53,22 @@ const BITE_RANGE = 2.1;
 const BATTERY_GAIN = 45;
 const SWITCH_LIT = 14;
 const HIDE_SEARCH_RANGE = 2.4;
-const HIDE_DEPTH = 0.82;
+/** Distancia (u) a la que un fantasma puede ver la puerta del armario. */
+const HIDE_SIGHT = 3.4;
+/** Gasto de aliento por segundo al contener la respiracion, y cuanto reduce la sospecha. */
+const HOLD_DRAIN = 14;
+const HOLD_FACTOR = 0.35;
+/** Sospecha que se pierde por segundo cuando el fantasma no ve el armario, y salto al quedarse sin aliento. */
+const HIDE_DECAY = 0.25;
+const HIDE_GASP = 0.25;
+/** Sospecha inicial de los fantasmas que lo vieron o lo oyeron entrar. */
+const ENTER_SEEN = 0.7;
+const ENTER_HEARD = 0.4;
+/** Revision de armarios: radio (celdas) alrededor del ultimo avistamiento, tiempo mirando dentro y espera antes de repetir. */
+const CHECK_RADIUS = 4;
+const CHECK_LINGER = 2.0;
+const CHECK_COOLDOWN = 25;
+const HIDE_DEPTH = 0.95;
 const BITE_STUN = 1.7;
 
 export class Simulation {
@@ -89,6 +104,14 @@ export class Simulation {
   private hideCd = 0;
   private prevLight = true;
   private searchT = new Map<GhostSim, number>();
+  /** Sospecha (0..1) de cada fantasma sobre el armario donde esta el jugador. A 1 abre la puerta. */
+  private suspicion = new Map<GhostSim, number>();
+  /** Mayor sospecha actual (para el latido y el sonido). */
+  hideThreat = 0;
+  /** True mientras el jugador contiene la respiracion dentro del armario. */
+  holdingBreath = false;
+  private holdLock = false;
+  private holdInput = false;
   fruit = { active: false, x: 0, z: 0, timer: 0, spawned: 0 };
   score: number;
   rawPoints = 0;
@@ -176,9 +199,35 @@ export class Simulation {
 
   // ---------------- ciclo de vida ----------------
 
+  /**
+   * Celda segura para reaparecer: la mas cercana (por pasillos) al lugar de la muerte que este a 8 celdas o mas de
+   * cualquier guarida de fantasma, fuera de las zonas oscuras y de la salida. Null si no hay ninguna.
+   */
+  safeRespawnCell(death: Cell): Cell | null {
+    const m = this.maze;
+    const field = m.distanceField([m.nearestWalkable(death)]);
+    let best: Cell | null = null, bd = Infinity;
+    for (let y = 0; y < m.H; y++) for (let x = 0; x < m.W; x++) {
+      if (!m.isWalkable(x, y)) continue;
+      const d = field[y * m.W + x];
+      if (d >= bd || d > 16) continue;
+      if (this.ghosts.some((g) => Math.hypot(g.spawn[0] - x, g.spawn[1] - y) < 8)) continue;
+      if (Math.hypot(m.exit[0] - x, m.exit[1] - y) < 3) continue;
+      const w = m.cellToWorld(x, y);
+      if (this.darknessAt(w.x, w.z) > 0.3) continue;
+      bd = d; best = [x, y];
+    }
+    return best;
+  }
+
   /** Coloca al jugador y deja a los fantasmas dormidos en su guarida. */
   respawnPlayer(first = false): void {
-    const [px, py] = this.layout.player;
+    // la primera vez, la salida del nivel; despues, la celda segura mas cercana a donde moriste
+    let [px, py] = this.layout.player;
+    if (!first) {
+      const safe = this.safeRespawnCell(this.maze.worldToCell(this.player.x, this.player.z));
+      if (safe) [px, py] = safe;
+    }
     const w = this.maze.cellToWorld(px, py);
     // mira hacia el pasillo abierto mas largo
     let bestDir: Cell = [0, -1], bestRun = -1;
@@ -187,7 +236,9 @@ export class Simulation {
       while (run < 12 && this.maze.isWalkable(px + d[0] * (run + 1), py + d[1] * (run + 1))) run++;
       if (run > bestRun) { bestRun = run; bestDir = d; }
     }
+    const keepBattery = this.player.battery;
     this.player.reset(w.x, w.z, Math.atan2(-bestDir[0], -bestDir[1]));
+    if (!first) this.player.battery = Math.max(keepBattery, K.BATTERY_MAX * 0.6);
     this.ctx.trail.clear();
     this.ctx.trail.push(this.time, w.x, w.z);
     depenetrate(this.maze, this.colliders, this.player, K.PLAYER_RADIUS);
@@ -197,6 +248,9 @@ export class Simulation {
     this.hidden = null;
     this.hiddenSeen = false;
     this.hiddenSuspected = false;
+    this.suspicion.clear();
+    this.hideThreat = 0; this.holdingBreath = false; this.holdLock = false;
+    for (const gh of this.ghosts) { gh.checkSpot = -1; gh.checkT = 0; }
     this.searchT.clear();
     this.attemptTime = 0;
     this.frightTimer = 0;
@@ -268,6 +322,8 @@ export class Simulation {
     this.hideCd = Math.max(0, this.hideCd - dt);
     for (let i = 0; i < this.zoneLit.length; i++) this.zoneLit[i] = Math.max(0, this.zoneLit[i] - dt);
     if (input.interact) this.tryInteract();
+    this.holdInput = !!this.hidden && !!input.sonar;
+    const stam0 = this.player.stamina;
     const pin: PlayerInput = this.hidden ? { forward: 0, strafe: 0, sprint: false, sonar: false, lookBack: false } : input;
 
     const anyFrozen = this.ghosts.some((g) => g.frozen);
@@ -283,6 +339,7 @@ export class Simulation {
     if (input.bite && !this.hidden) this.tryBite();
 
     if (this.hidden) {
+      this.updateBreath(dt, stam0);
       const h = this.hidden;
       this.player.x = h.x + h.wall[0] * HIDE_DEPTH; this.player.z = h.z + h.wall[1] * HIDE_DEPTH;
       this.player.vx = 0; this.player.vz = 0; this.player.noise = 0;
@@ -291,7 +348,7 @@ export class Simulation {
 
     this.updateWaves(dt);
     this.updateGhosts(dt);
-    this.updateSearch(dt);
+    this.updateSuspicion(dt);
     this.checkCatch();
     if (this.state !== "playing") return;
     this.checkDots();
@@ -449,19 +506,30 @@ export class Simulation {
           const distToPlayer = Math.hypot(g.x - this.player.x, g.z - this.player.z);
           if (distToPlayer < 9 && this.maze.rayClear(g.x, g.z, this.player.x, this.player.z, 0.35)) {
             // El fantasma tiene contacto visual: aceleracion depredadora que escala con la dificultad
-            const surge = 1 + 0.12 * (1 - this.diff.mistake);
+            // el impulso depredador crece con las tacticas de la dificultad: ninguno en Aprendiz, la mitad en Normal
+            const surge = 1 + 0.12 * (1 - this.diff.mistake) * ((this.diff.tactics ?? 2) / 2);
             speed *= surge;
           }
         }
+        // hacia donde mira un fantasma detenido (el avance recalcula `yaw` a partir del movimiento, asi que se fija despues)
+        let gaze: { x: number; z: number } | null = null;
         if (this.hidden) {
           const distToHide = Math.hypot(g.x - this.hidden.x, g.z - this.hidden.z);
           const st = this.searchT.get(g) ?? 0;
           if (distToHide < HIDE_SEARCH_RANGE && st >= 0 && this.maze.rayClear(g.x, g.z, this.player.x, this.player.z, 0.4)) {
             // ghost stops in front of the locker to inspect it
             speed = 0;
-            g.yaw = Math.atan2(this.hidden.wall[0], this.hidden.wall[1]);
+            gaze = this.doorOf(this.hidden); // mira la puerta
           }
         }
+        // revision de un armario: se detiene junto a el mirando hacia dentro y luego sigue
+        const chk = this.hideSpots[g.checkSpot];
+        if (chk && Math.hypot(g.x - chk.x, g.z - chk.z) < 0.6) {
+          speed = 0;
+          gaze = this.doorOf(chk);
+          g.checkT += dt;
+          if (g.checkT >= CHECK_LINGER) { g.checkedAt[g.checkSpot] = this.time; g.checkSpot = -1; g.checkT = 0; }
+        } else if (g.checkSpot >= 0 && !chk) { g.checkSpot = -1; g.checkT = 0; }
         g.speedCells = speed;
         wrapped = g.advance(this.maze, dt, (gg) => {
           let target: Cell;
@@ -470,11 +538,14 @@ export class Simulation {
             target = this.hidden.cell;
           } else if (mode === "scatter") {
             target = gg.corner;
+          } else if (this.checkTarget(gg)) {
+            target = this.checkTarget(gg)!;
           } else {
             target = this.maze.nearestWalkable(chaseTarget(gg, ctx));
           }
           return chooseToward(gg, ctx, target, gg.sawPlayer ? 0 : ctx.mistake);
         });
+        if (gaze) g.yaw = Math.atan2(gaze.x - g.x, gaze.z - g.z);
       }
       if (wrapped) this.emit({ type: "wrap", who: g.kind });
       if (!this.hidden) this.lunge(g, dt);
@@ -593,6 +664,14 @@ export class Simulation {
     const heard = !seen && (p.running || p.exhausted) && this.ghosts.some((g) => g.lethal && Math.hypot(g.x - p.x, g.z - p.z) < 12);
     this.hiddenSeen = seen;
     this.hiddenSuspected = heard;
+    this.suspicion.clear();
+    this.holdLock = false;
+    for (const g of this.ghosts) {
+      if (!g.lethal) continue;
+      const dd = Math.hypot(g.x - p.x, g.z - p.z);
+      if (dd < 10 && this.maze.rayClear(p.x, p.z, g.x, g.z, 0.4)) this.suspicion.set(g, ENTER_SEEN);
+      else if ((p.running || p.exhausted) && dd < 12) this.suspicion.set(g, ENTER_HEARD);
+    }
     // si nadie te vio ni te oyo entrar, pierden el rastro
     if (!seen && !heard) {
       for (const g of this.ghosts) { g.lastSeen = null; g.lostT = 0; g.sawPlayer = false; }
@@ -613,6 +692,9 @@ export class Simulation {
     this.hidden = null;
     this.hiddenSeen = false;
     this.hiddenSuspected = false;
+    this.suspicion.clear();
+    this.hideThreat = 0;
+    this.holdingBreath = false;
     this.hideCd = 0.6;
     p.x = h.x; p.z = h.z;
     if (this.prevLight && p.battery > 0 && !p.batteryLocked) p.flashlightOn = true;
@@ -655,39 +737,127 @@ export class Simulation {
     }
   }
 
+  /** Puerta del armario en el mundo: es lo que ven los fantasmas. */
+  private doorOf(h: HideSpotState): { x: number; z: number } {
+    return { x: h.x + h.wall[0] * 0.56, z: h.z + h.wall[1] * 0.56 };
+  }
+
+  /** Sospecha por segundo con el fantasma a distancia ideal y viendo la puerta, segun la dificultad. */
+  private get suspicionBase(): number {
+    switch (this.diff.id) {
+      case "easy": return 0.35;
+      case "normal": return 0.5;
+      default: return 0.65;
+    }
+  }
+
+  /** Segundos que un fantasma se queda mirando el armario antes de rendirse. */
+  private get lingerTime(): number {
+    switch (this.diff.id) {
+      case "easy": return 2.5;
+      case "normal": return 3.5;
+      default: return 4.5;
+    }
+  }
+
   /**
-   * Un fantasma peligroso junto al escondite lo registra:
-   * si vio al jugador entrar la probabilidad de descubrirlo es muy alta (95 %),
-   * si lo oyo correr cerca es moderada (75 %), y si pasa por casualidad es baja (40 %).
+   * Contener el aliento (mantener Espacio dentro del armario): gasta aliento y reduce la sospecha. Al agotarse se
+   * jadea (un salto de sospecha en los fantasmas cercanos) y no se puede volver a contener hasta recuperar un poco.
    */
-  private updateSearch(dt: number): void {
-    const h = this.hidden;
-    if (!h) return;
+  private updateBreath(dt: number, stam0: number): void {
     const p = this.player;
-    for (const g of this.ghosts) {
-      if (!g.lethal) { this.searchT.delete(g); continue; }
-      const near = Math.hypot(g.x - h.x, g.z - h.z) < HIDE_SEARCH_RANGE && this.maze.rayClear(g.x, g.z, p.x, p.z, 0.4);
-      let t = this.searchT.get(g) ?? 0;
-      if (t < 0) { this.searchT.set(g, Math.min(0, t + dt)); continue; } // enfriamiento tras una busqueda fallida
-      if (!near) { this.searchT.set(g, Math.max(0, t - dt)); continue; }
-      t += dt;
-      const inspectDuration = this.hiddenSeen ? 1.2 : this.hiddenSuspected ? 1.6 : 2.2;
-      if (t >= inspectDuration) {
-        const catchProb = this.hiddenSeen ? 0.95 : this.hiddenSuspected ? 0.75 : 0.40;
-        if (this.rng() < catchProb) {
-          this.state = "caught";
-          this.caughtBy = g;
-          this.emit({ type: "caught", ghost: g.kind });
-          return;
+    if (this.holdLock && p.stamina >= 30) this.holdLock = false;
+    const want = this.holdInput && !this.holdLock && stam0 > 0;
+    if (want) {
+      p.stamina = Math.max(0, stam0 - HOLD_DRAIN * dt);
+      if (p.stamina <= 0) {
+        this.holdLock = true;
+        this.emit({ type: "gasp" });
+        const h = this.hidden!;
+        // el jadeo se oye: los fantasmas a menos de 8 celdas lo registran y vienen a mirar el armario
+        const pc = this.maze.worldToCell(p.x, p.z);
+        for (const g of this.ghosts) {
+          if (g.lethal && Math.hypot(g.cx - pc[0], g.cy - pc[1]) < 8) { g.lastSeen = [pc[0], pc[1]]; g.lostT = 0; this.hiddenSuspected = true; }
         }
-        this.hiddenSeen = false;
-        this.hiddenSuspected = false;
-        this.searchT.set(g, -4);
-        g.reverseQueued = true;
-      } else {
-        this.searchT.set(g, t);
+        const d0 = this.doorOf(h);
+        for (const g of this.ghosts) {
+          if (g.lethal && Math.hypot(g.x - d0.x, g.z - d0.z) < HIDE_SIGHT * 1.3) this.suspicion.set(g, Math.min(1, (this.suspicion.get(g) ?? 0) + HIDE_GASP));
+        }
       }
     }
+    this.holdingBreath = want && p.stamina > 0;
+  }
+
+  /**
+   * Cada fantasma peligroso acumula sospecha sobre el armario mientras ve su puerta de cerca: mas rapido cuanto mas
+   * cerca esta, con luz y sin contener el aliento. Si la sospecha llega a 1 abre la puerta. Tras mirar un rato sin
+   * convencerse se marcha. Los que te vieron o oyeron entrar empiezan con sospecha (0,7 y 0,4).
+   */
+  private updateSuspicion(dt: number): void {
+    const h = this.hidden;
+    if (!h) { this.hideThreat = 0; this.holdingBreath = false; return; }
+    const door = this.doorOf(h);
+    const dark = this.darknessAt(door.x, door.z);
+    const vis = 1 - 0.45 * dark;
+    let threat = 0;
+    for (const g of this.ghosts) {
+      if (!g.lethal) { this.suspicion.delete(g); this.searchT.delete(g); continue; }
+      let s = this.suspicion.get(g) ?? 0;
+      const d = Math.hypot(g.x - door.x, g.z - door.z);
+      const los = d < HIDE_SIGHT && this.maze.rayClear(g.x, g.z, door.x, door.z, 0.4);
+      const dirx = (door.x - g.x) / (d || 1), dirz = (door.z - g.z) / (d || 1);
+      const facing = Math.sin(g.yaw) * dirx + Math.cos(g.yaw) * dirz;
+      const sees = los && (d < 1.4 || facing > 0.34);
+      let t = this.searchT.get(g) ?? 0;
+      if (t < 0) t = Math.min(0, t + dt); // enfriamiento tras rendirse
+      if (sees && t >= 0) {
+        const prox = Math.max(0, Math.min(1, (HIDE_SIGHT - d) / (HIDE_SIGHT - 1.0)));
+        const checking = g.checkSpot >= 0 && this.hideSpots[g.checkSpot] === h ? 3 : 1;
+        s += this.suspicionBase * prox * vis * checking * (this.holdingBreath ? HOLD_FACTOR : 1) * dt;
+        t += dt;
+        if (t >= (checking > 1 ? CHECK_LINGER + 0.5 : this.lingerTime)) {
+          // no se convence: se marcha y no vuelve a mirar durante un rato
+          t = -6;
+          g.reverseQueued = true;
+        }
+      } else if (!sees) {
+        s = Math.max(0, s - HIDE_DECAY * dt);
+        if (t > 0) t = Math.max(0, t - dt);
+      }
+      this.searchT.set(g, t);
+      s = Math.min(1.2, s);
+      this.suspicion.set(g, s);
+      threat = Math.max(threat, Math.min(1, s));
+      if (s >= 1) {
+        this.state = "caught";
+        this.caughtBy = g;
+        this.emit({ type: "caught", ghost: g.kind });
+        return;
+      }
+    }
+    this.hideThreat = threat;
+  }
+
+  /**
+   * Armario que debe revisar este fantasma: si perdio al jugador hace poco cerca de uno o dos armarios, va a mirarlos
+   * (el mas cercano a donde lo vio por ultima vez primero). Cada armario se revisa como mucho cada 25 s por fantasma.
+   */
+  private checkTarget(g: GhostSim): Cell | null {
+    if ((this.diff.tactics ?? 2) < 1 || !this.hideSpots.length) return null;
+    if (g.checkSpot >= 0) return this.hideSpots[g.checkSpot]?.cell ?? null;
+    const seen = g.lastSeen;
+    if (!seen || g.sawPlayer || g.lostT <= 0.4) return null;
+    if (g.checkedAt.length !== this.hideSpots.length) g.checkedAt = this.hideSpots.map(() => -1e9);
+    let best = -1, bd = CHECK_RADIUS;
+    this.hideSpots.forEach((h, i) => {
+      if (this.time - g.checkedAt[i] < CHECK_COOLDOWN) return;
+      const d = Math.hypot(h.cell[0] - seen[0], h.cell[1] - seen[1]);
+      if (d < bd) { bd = d; best = i; }
+    });
+    if (best < 0) return null;
+    g.checkSpot = best; g.checkT = 0;
+    this.emit({ type: "hideCheck", ghost: g.kind });
+    return this.hideSpots[best].cell;
   }
 
   private eatGhost(g: GhostSim): void {
