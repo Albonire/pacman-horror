@@ -106,6 +106,8 @@ export class GhostVoice {
 
   update(dt: number, g: AudioGhost, _tension: number): void {
     const S = this.S;
+    // lejos y en silencio no hay nada que mover: ahorra automatizacion de parametros
+    if (g.dist > 16 && this.loud < 0.08) { this.loud = 0; return; }
     S.setPannerPos(this.panner, g.x, g.y, g.z);
     const hunting = (g.mode === "chase" || g.mode === "scatter") && !g.frozen;
     const want = hunting && !g.silent ? 1 : 0;

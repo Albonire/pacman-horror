@@ -3,6 +3,9 @@
 
 import { decodeSample, type SampleId } from "./samples";
 
+/** Tope de tonos y rafagas simultaneos antes de descartar los de poco volumen. */
+export const MAX_LIVE_VOICES = 42;
+
 export type NoiseKind = "white" | "pink" | "brown";
 
 export interface ToneOpts {
@@ -72,12 +75,14 @@ export class Synth {
   private muted = false;
   /** Multiplicador de mezcla temporal para el efecto en curso (ver tabla MIX del motor). */
   trim = 1;
+  /** Fuentes efimeras (tonos y rafagas) vivas ahora mismo. */
+  live = 0;
 
   /** `ctx` permite inyectar un OfflineAudioContext (pruebas de render sin dispositivo de audio). */
   constructor(ctx?: AudioContext) {
     if (!ctx) {
       const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      ctx = new Ctx({ latencyHint: "interactive" });
+      ctx = new Ctx({ latencyHint: "balanced" });
     }
     this.ctx = ctx;
     this.master = ctx.createGain();
@@ -247,7 +252,11 @@ export class Synth {
     }
   }
 
-  tone(o: ToneOpts): OscillatorNode {
+  /** Con muchas voces vivas se descartan las suaves: en equipos justos cada nodo cuenta para el hilo de audio. */
+  private overloaded(vol: number): boolean { return this.live >= MAX_LIVE_VOICES && vol * this.trim < 0.22; }
+
+  tone(o: ToneOpts): OscillatorNode | null {
+    if (this.overloaded(o.vol)) return null;
     const ctx = this.ctx;
     const t = o.t ?? ctx.currentTime;
     const osc = ctx.createOscillator();
@@ -275,10 +284,13 @@ export class Synth {
     this.out(g, o.dest ?? this.sfx, o.send ?? 0);
     osc.start(t);
     osc.stop(t + o.dur + 0.05);
+    this.live++;
+    osc.onended = () => { this.live--; };
     return osc;
   }
 
-  noise(o: NoiseOpts): AudioBufferSourceNode {
+  noise(o: NoiseOpts): AudioBufferSourceNode | null {
+    if (this.overloaded(o.vol)) return null;
     const ctx = this.ctx;
     const t = o.t ?? ctx.currentTime;
     const src = ctx.createBufferSource();
@@ -302,6 +314,8 @@ export class Synth {
     this.out(g, o.dest ?? this.sfx, o.send ?? 0);
     src.start(t, o.offset ?? Math.random() * 1.2);
     src.stop(t + o.dur + 0.05);
+    this.live++;
+    src.onended = () => { this.live--; };
     return src;
   }
 
@@ -349,31 +363,49 @@ export class Synth {
     src.start(t); src.stop(t + opts.dur + 0.05);
   }
 
-  /** Panner HRTF para fuentes puntuales. */
-  panner(x: number, y: number, z: number, ref = 2.2, rolloff = 1.25): PannerNode {
+  /**
+   * Panner para fuentes puntuales. `equalpower` es mucho mas barato que HRTF (una convolucion por fuente y
+   * bloque de audio) y basta para ubicar de lado; HRTF solo cuando se pide (`hq`).
+   */
+  panner(x: number, y: number, z: number, ref = 2.2, rolloff = 1.25, hq = false): PannerNode {
     const p = this.ctx.createPanner();
-    p.panningModel = "HRTF";
+    p.panningModel = hq ? "HRTF" : "equalpower";
     p.distanceModel = "inverse";
     p.refDistance = ref;
     p.maxDistance = 45;
     p.rolloffFactor = rolloff;
-    this.setPannerPos(p, x, y, z);
+    this.setPannerPos(p, x, y, z, true);
     return p;
   }
 
-  setPannerPos(p: PannerNode, x: number, y: number, z: number): void {
+  private lastPan = new WeakMap<AudioNode, number>();
+
+  /** Mueve una fuente. Se limita a ~15 Hz y se vacia la linea de tiempo del parametro para que no crezca. */
+  setPannerPos(p: PannerNode, x: number, y: number, z: number, force = false): void {
+    const t = this.ctx.currentTime;
+    if (!force && t - (this.lastPan.get(p) ?? -1) < 0.066) return;
+    this.lastPan.set(p, t);
     if (p.positionX) {
-      const t = this.ctx.currentTime;
-      p.positionX.setTargetAtTime(x, t, 0.03); p.positionY.setTargetAtTime(y, t, 0.03); p.positionZ.setTargetAtTime(z, t, 0.03);
+      this.glide(p.positionX, x, t); this.glide(p.positionY, y, t); this.glide(p.positionZ, z, t);
     } else (p as unknown as { setPosition(x: number, y: number, z: number): void }).setPosition(x, y, z);
   }
+
+  /** Lleva un parametro a `v` en ~70 ms descartando los eventos futuros previos (la linea de tiempo no crece). */
+  private glide(param: AudioParam, v: number, t: number): void {
+    param.cancelScheduledValues(t);
+    param.linearRampToValueAtTime(v, t + 0.07);
+  }
+
+  private lastListener = -1;
 
   setListener(x: number, y: number, z: number, fx: number, fy: number, fz: number): void {
     const l = this.ctx.listener;
     const t = this.ctx.currentTime;
+    if (t - this.lastListener < 0.066) return;
+    this.lastListener = t;
     if (l.positionX) {
-      l.positionX.setTargetAtTime(x, t, 0.02); l.positionY.setTargetAtTime(y, t, 0.02); l.positionZ.setTargetAtTime(z, t, 0.02);
-      l.forwardX.setTargetAtTime(fx, t, 0.02); l.forwardY.setTargetAtTime(fy, t, 0.02); l.forwardZ.setTargetAtTime(fz, t, 0.02);
+      this.glide(l.positionX, x, t); this.glide(l.positionY, y, t); this.glide(l.positionZ, z, t);
+      this.glide(l.forwardX, fx, t); this.glide(l.forwardY, fy, t); this.glide(l.forwardZ, fz, t);
       l.upX.value = 0; l.upY.value = 1; l.upZ.value = 0;
     } else {
       const lx = l as unknown as { setPosition(x: number, y: number, z: number): void; setOrientation(a: number, b: number, c: number, d: number, e: number, f: number): void };

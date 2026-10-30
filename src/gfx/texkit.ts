@@ -17,11 +17,15 @@ export function makeCanvas(w: number, h: number): { c: HTMLCanvasElement; ctx: C
   return { c, ctx };
 }
 
+/** Anisotropia con la que se crean las texturas nuevas (la fija la calidad grafica; en GPU integrada cuesta mucho ancho de banda). */
+let anisotropy = 8;
+export function setAnisotropy(n: number): void { anisotropy = n; }
+
 export function toTexture(c: HTMLCanvasElement, srgb: boolean, repeat = true): THREE.CanvasTexture {
   const t = new THREE.CanvasTexture(c);
   if (repeat) { t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.RepeatWrapping; }
   t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-  t.anisotropy = 16;
+  t.anisotropy = anisotropy;
   t.generateMipmaps = true;
   t.minFilter = THREE.LinearMipmapLinearFilter;
   return t;

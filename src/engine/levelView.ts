@@ -108,25 +108,26 @@ export class LevelView {
     this.theme = theme;
     const { maze } = sim;
     const mazeW = maze.worldWidth, mazeD = maze.worldDepth;
-    this.poolSize = quality === "high" ? 8 : quality === "medium" ? 6 : 4;
+    this.poolSize = quality === "high" ? 8 : quality === "medium" ? 5 : 2;
+    const lite = quality === "low";
 
     // ---- suelo y techo ----
     const margin = CELL * 2;
     const planeGeo = new THREE.PlaneGeometry(mazeW + margin, mazeD + margin);
     const fr = theme.floorCells;
     const rep: [number, number] = [(mazeW + margin) / CELL / fr, (mazeD + margin) / CELL / fr];
-    const floor = new THREE.Mesh(planeGeo, surfaceMaterial(tex.floor, rep, {}, { scale: 0.12, strength: 0.4, detail: 0.16 }));
+    const floor = new THREE.Mesh(planeGeo, surfaceMaterial(tex.floor, rep, {}, { scale: 0.12, strength: 0.4, detail: 0.16 }, 1, lite));
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
     this.group.add(floor);
-    const ceil = new THREE.Mesh(planeGeo.clone(), surfaceMaterial(tex.ceiling, rep, {}, { scale: 0.1, strength: 0.3, detail: 0.12 }));
+    const ceil = new THREE.Mesh(planeGeo.clone(), surfaceMaterial(tex.ceiling, rep, {}, { scale: 0.1, strength: 0.3, detail: 0.12 }, 1, lite));
     ceil.rotation.x = Math.PI / 2;
     ceil.position.y = WALL_H;
     this.group.add(ceil);
 
     // ---- paredes ----
     const wallGeo = buildWallGeometry(maze, { withConnectors: true });
-    const wallMat = surfaceMaterial(tex.wall, [1, 1], { vertexColors: true }, { scale: 0.2, strength: 0.38, vertical: true, detail: 0.2 }, theme.wallBump);
+    const wallMat = surfaceMaterial(tex.wall, [1, 1], { vertexColors: true }, { scale: 0.2, strength: 0.38, vertical: true, detail: 0.2 }, theme.wallBump, lite);
     const walls = new THREE.Mesh(wallGeo, wallMat);
     walls.castShadow = true;
     walls.receiveShadow = true;

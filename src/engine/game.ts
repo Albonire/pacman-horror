@@ -14,7 +14,7 @@ import { CAMPAIGN, type LevelDef } from "../config/campaign";
 import * as K from "../config/constants";
 import { DIFFICULTIES, type DifficultyId } from "../config/difficulty";
 import { THEMES, type ThemeTextures, type ThemeVisual } from "../gfx/themes";
-import { disposeTexSet } from "../gfx/texkit";
+import { disposeTexSet, setAnisotropy } from "../gfx/texkit";
 import type { FaceKind } from "../gfx/faces";
 import type { SimEvent } from "../sim/events";
 import { rayDistance } from "../sim/collision";
@@ -106,7 +106,13 @@ export class Game {
   private headlamp = new THREE.SpotLight(0xfff0c0, 60, 34, 0.5, 0.75, 2);
   private headTarget = new THREE.Object3D();
   private headDist = 6;
-  private perf = { t: 0, sum: 0, n: 0, checks: 0 };
+  /** Controlador de resolucion dinamica y estadisticas de frame. */
+  private perf = { warm: 0, acc: 0, n: 0, since: 0, fastFor: 0, ceiling: 1, ceilAt: -1e9, notified: false, qualitySteps: 0 };
+  private frameMs: number[] = [];
+  /** Factor de resolucion dinamica (0,55..1) sobre la escala base de la calidad. */
+  private resScale = 1;
+  private baseScale = 1;
+  private sanitize!: ShaderPass;
   private sizeW = 0;
   private sizeH = 0;
   private sizeDpr = 1;
@@ -126,6 +132,9 @@ export class Game {
   private onContextRestored = () => { this.contextLost = false; this.onResize(); this.hud.message("Se recupero la tarjeta grafica.", 3, "warn"); };
   private contextLost = false;
   private onVisibility = () => { if (document.hidden && this.phase === "playing") this.pause(); };
+  /** Instante del ultimo cambio de pantalla completa: perder el bloqueo del raton justo entonces no es una pausa del jugador. */
+  private fsChangeAt = -1e9;
+  private onFullscreen = () => { this.fsChangeAt = performance.now(); };
 
   // estado de juego
   private tension = 0;
@@ -198,7 +207,8 @@ export class Game {
     const target = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(this.renderer, target);
     this.composer.addPass(new RenderPass(this.scene, this.rig.camera));
-    this.composer.addPass(makeSanitizePass());
+    this.sanitize = makeSanitizePass();
+    this.composer.addPass(this.sanitize);
     const jawPass = new RenderPass(this.jaws.scene, this.jaws.camera);
     jawPass.clear = false;
     jawPass.clearDepth = true;
@@ -222,7 +232,10 @@ export class Game {
       onToggleMute: () => this.toggleMute(),
       onBite: () => this.bite(),
       onInteract: () => { if (this.phase === "playing") this.interactReq = true; },
-      onLockLost: () => { if (this.phase === "playing" && this.input.needsLock) this.pause(); },
+      onLockLost: () => {
+        if (performance.now() - this.fsChangeAt < 900) return; // entrar o salir de pantalla completa suelta el raton: no es una pausa
+        if (this.phase === "playing" && this.input.needsLock) this.pause();
+      },
       onLockError: () => this.onLockError(),
     });
     this.input.attach();
@@ -233,6 +246,7 @@ export class Game {
     this.renderer.domElement.addEventListener("webglcontextlost", this.onContextLost);
     this.renderer.domElement.addEventListener("webglcontextrestored", this.onContextRestored);
     document.addEventListener("visibilitychange", this.onVisibility);
+    document.addEventListener("fullscreenchange", this.onFullscreen);
 
     this.applySettings(this.settings, false);
     this.hud.setVisible(false);
@@ -381,15 +395,34 @@ export class Game {
     const q = s.quality;
     const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
     this.sizeDpr = dpr;
-    const pr = Math.min(dpr, q === "high" ? 1.75 : q === "medium" ? 1.25 : 1);
-    this.renderer.setPixelRatio(pr);
-    this.composer.setPixelRatio(pr);
+    // escala base de resolucion por calidad (en GPU integrada el relleno de pixeles es el cuello de botella)
+    this.baseScale = q === "high" ? Math.min(dpr, 1.5) : q === "medium" ? Math.min(dpr, 1) : 0.7;
+    if (!s.dynamicRes) this.resScale = 1;
+    this.applyResolution(false);
+    // MSAA solo en alta (x4) y media (x2); en baja el render target es sencillo
+    const msaa = q === "high" ? 4 : q === "medium" ? 2 : 0;
+    for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) {
+      if (rt.samples !== msaa) { rt.samples = msaa; rt.dispose(); }
+    }
+    // anisotropia: las texturas ya creadas se actualizan al volver a subirlas
+    const aniso = q === "high" ? 8 : q === "medium" ? 4 : 2;
+    setAnisotropy(aniso);
+    for (const t of this.texCache.values()) {
+      for (const set of [t.wall, t.floor, t.ceiling]) for (const tex of [set.map, set.normal, set.rough, set.emissive]) {
+        if (tex && tex.anisotropy !== aniso) { tex.anisotropy = aniso; tex.needsUpdate = true; }
+      }
+    }
     this.renderer.shadowMap.enabled = q !== "low";
     this.headlamp.castShadow = q !== "low";
     this.headlamp.shadow.mapSize.set(q === "high" ? 1024 : 512, q === "high" ? 1024 : 512);
     this.headlamp.shadow.map?.dispose();
     this.headlamp.shadow.map = null;
     this.bloom.enabled = q !== "low";
+    this.sanitize.enabled = q !== "low"; // sin bloom no hay desenfoque que propague un NaN
+    // luces puntuales extra: cada una cuesta en todos los fragmentos de pared y suelo
+    const ghostLights = q === "high" ? 2 : q === "medium" ? 1 : 0;
+    this.ghostLights.forEach((l, i) => { l.visible = i < ghostLights; });
+    this.pelletLight.visible = q !== "low";
     this.onResize();
     if (persist) { saveSettings(s); this.cb.onSettings(s); }
   }
@@ -399,6 +432,7 @@ export class Game {
     cancelAnimationFrame(this.raf);
     this.resizeObs.disconnect();
     document.removeEventListener("visibilitychange", this.onVisibility);
+    document.removeEventListener("fullscreenchange", this.onFullscreen);
     window.removeEventListener("resize", this.onWindowResize);
     this.renderer.domElement.removeEventListener("webglcontextlost", this.onContextLost);
     this.renderer.domElement.removeEventListener("webglcontextrestored", this.onContextRestored);
@@ -597,26 +631,65 @@ export class Game {
     this.advance(real);
   };
 
+  /** Aplica `baseScale * resScale` como relacion de pixeles del render (y reajusta el tamano si `resize`). */
+  private applyResolution(resize = true): void {
+    const pr = Math.max(0.4, this.baseScale * this.resScale);
+    this.renderer.setPixelRatio(pr);
+    this.composer.setPixelRatio(pr);
+    if (resize) this.onResize();
+  }
+
   /**
-   * Si el equipo no sostiene ~26 fps durante unos segundos de partida, baja la calidad un escalon
-   * (alta, media, baja) y lo avisa. Se evalua poco despues de entrar al nivel y un maximo de tres veces.
+   * Resolucion dinamica: mide el tiempo medio de frame cada segundo y baja la resolucion de render (hasta 0,55 de la
+   * base) si no se sostienen ~38 fps; la sube de nuevo, con paciencia, si sobra holgura. No vuelve a la escala que
+   * acaba de causar el lag hasta pasados 40 s. Si en el minimo sigue lento, baja un escalon de calidad (maximo dos).
    */
   private watchPerformance(rawDt: number): void {
-    if (this.phase !== "playing") { this.perf.t = 0; this.perf.sum = 0; this.perf.n = 0; return; }
-    if (this.perf.checks >= 3 || rawDt > 0.6) return; // los parones (cambio de pestana, carga) no cuentan
-    this.perf.t += rawDt;
-    if (this.perf.t < 2) return; // calentamiento: compilacion de shaders y subida de texturas
-    this.perf.sum += rawDt; this.perf.n++;
-    if (this.perf.sum < 4) return;
-    const avg = this.perf.sum / this.perf.n;
-    this.perf.sum = 0; this.perf.n = 0; this.perf.t = 0;
-    if (avg <= 1 / 26) { this.perf.checks = 3; return; } // fluido: no se vuelve a evaluar
-    this.perf.checks++;
-    const order: Quality[] = ["high", "medium", "low"];
-    const next = order[order.indexOf(this.settings.quality) + 1];
-    if (!next) { this.perf.checks = 3; return; }
-    this.applySettings({ ...this.settings, quality: next });
-    this.hud.message(`Rendimiento bajo (${Math.round(1 / avg)} fps): calidad reducida a ${next === "medium" ? "MEDIA" : "BAJA"}.`, 4, "warn");
+    const active = this.phase === "playing" || this.phase === "menu" || this.phase === "briefing";
+    const P = this.perf;
+    if (!active || rawDt <= 0 || rawDt > 0.6) { if (!active) { P.warm = 0; P.acc = 0; P.n = 0; } return; } // parones (pestana, carga) no cuentan
+    this.frameMs.push(rawDt * 1000);
+    if (this.frameMs.length > 240) this.frameMs.shift();
+    if (!this.settings.dynamicRes) return;
+    P.warm += rawDt;
+    if (P.warm < 2.5) return; // compilacion de shaders y subida de texturas
+    P.acc += rawDt; P.n++; P.since += rawDt;
+    if (P.acc < 1) return;
+    const avg = P.acc / P.n;
+    P.acc = 0; P.n = 0;
+    if (P.since < 1.5) return;
+    const MIN = 0.55;
+    if (avg > 1 / 38) {
+      P.fastFor = 0;
+      if (this.resScale > MIN + 0.001) {
+        P.ceiling = this.resScale; P.ceilAt = this.time;
+        this.resScale = Math.max(MIN, +(this.resScale - (avg > 1 / 22 ? 0.15 : 0.08)).toFixed(2));
+        this.applyResolution();
+        P.since = 0;
+        if (!P.notified) { P.notified = true; this.hud.message("Resolución dinámica: bajando la nitidez para ir fluido", 3, "info"); }
+      } else if (P.qualitySteps < 2 && avg > 1 / 24) {
+        const order: Quality[] = ["high", "medium", "low"];
+        const next = order[order.indexOf(this.settings.quality) + 1];
+        if (next) {
+          P.qualitySteps++; P.since = 0;
+          this.applySettings({ ...this.settings, quality: next });
+          this.hud.message(`Rendimiento bajo (${Math.round(1 / avg)} fps): calidad ${next === "medium" ? "MEDIA" : "BAJA"}.`, 4, "warn");
+        }
+      }
+    } else if (avg < 1 / 54 && this.resScale < 1) {
+      if (++P.fastFor >= 5 && (this.resScale + 0.05 < P.ceiling - 0.001 || this.time - P.ceilAt > 40)) {
+        this.resScale = Math.min(1, +(this.resScale + 0.05).toFixed(2));
+        this.applyResolution();
+        P.since = 0; P.fastFor = 0;
+      }
+    } else P.fastFor = 0;
+  }
+
+  /** Estadisticas de render para depuracion (`__umbral.perfStats()` con `?debug`). */
+  perfStats(): { p50: number; p95: number; scale: number; pixelRatio: number; quality: string } {
+    const a = [...this.frameMs].sort((x, y) => x - y);
+    const at = (q: number) => (a.length ? +a[Math.min(a.length - 1, Math.floor(a.length * q))].toFixed(1) : 0);
+    return { p50: at(0.5), p95: at(0.95), scale: this.resScale, pixelRatio: +this.renderer.getPixelRatio().toFixed(2), quality: this.settings.quality };
   }
 
   /** Avanza la simulacion y renderiza un frame. Tambien lo usan las pruebas. */

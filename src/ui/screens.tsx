@@ -211,9 +211,11 @@ export function SettingsPanel({
         <Slider label="Brillo" value={settings.brightness} min={0.7} max={1.7} step={0.05} onChange={(v) => set("brightness", v)} format={(v) => v.toFixed(2)} />
         <Seg label="Sustos" value={settings.scares} options={[{ value: "full", label: "COMPLETOS" }, { value: "reduced", label: "REDUCIDOS" }, { value: "off", label: "SIN PANTALLA" }]} onChange={(v) => set("scares", v)} />
         <Seg label="Calidad gráfica" value={settings.quality} options={[{ value: "high", label: "ALTA" }, { value: "medium", label: "MEDIA" }, { value: "low", label: "BAJA" }]} onChange={(v) => set("quality", v)} />
+        <Toggle label="Pantalla completa al primer clic" value={settings.fullscreen} onChange={(v) => set("fullscreen", v)} />
+        <Toggle label="Resolución dinámica (baja sola si hay lag)" value={settings.dynamicRes} onChange={(v) => set("dynamicRes", v)} />
         <Toggle label="Balanceo de cámara" value={settings.headBob} onChange={(v) => set("headBob", v)} />
         <Toggle label="Silenciar todo" value={settings.muted} onChange={(v) => set("muted", v)} />
-        {inGame && <div className="p" style={{ marginTop: 10, fontSize: 13 }}>La calidad gráfica se aplica por completo al empezar el siguiente nivel.</div>}
+        {inGame && <div className="p" style={{ marginTop: 10, fontSize: 13 }}>La calidad gráfica se aplica al instante; la cantidad de luces del pasillo se actualiza al empezar el siguiente nivel.</div>}
         <div style={{ marginTop: 20 }}><Btn autoFocus onClick={onBack}>LISTO</Btn></div>
       </div>
     </Screen>

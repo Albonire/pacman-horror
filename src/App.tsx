@@ -83,8 +83,21 @@ export default function App() {
 
   // ---- acciones ----
   const game = () => gameRef.current;
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const fsAsked = useRef(false);
+  /** Primer clic o toque dentro del juego: audio y, una sola vez, pantalla completa. */
   const ensureAudio = useCallback(() => {
     gameRef.current?.audio.resume();
+    if (fsAsked.current || !settingsRef.current.fullscreen) return;
+    fsAsked.current = true;
+    const el = document.documentElement;
+    if (document.fullscreenElement || typeof el.requestFullscreen !== "function") return;
+    void el.requestFullscreen({ navigationUI: "hide" }).then(() => {
+      // con el bloqueo de teclado Esc pausa el juego sin sacarte de pantalla completa (Chrome y Edge)
+      const kb = (navigator as unknown as { keyboard?: { lock?: (keys: string[]) => Promise<void> } }).keyboard;
+      void kb?.lock?.(["Escape"]).catch(() => { /* no disponible */ });
+    }).catch(() => { /* el navegador lo rechazo: se sigue en ventana */ });
   }, []);
   const changeSettings = useCallback((s: Settings) => {
     setSettings(s);
