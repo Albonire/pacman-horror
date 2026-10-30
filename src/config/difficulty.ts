@@ -25,6 +25,8 @@ export interface DifficultyDef {
   searchTime: number; // segundos barriendo la zona tras perder el rastro
   stalkerSpeed: number; // multiplicador exclusivo de El Acechador en persecucion
   stalkerDelay: number; // retraso (s) del rastro que sigue El Acechador
+  /** Tacticas de equipo: 0 ninguna (Aprendiz), 1 pinza al ver al jugador (Normal), 2 pinza y prediccion de hacia donde huye. */
+  tactics: 0 | 1 | 2;
   silentChance: number; // prob. de que un fantasma peligroso se acerque sin hacer ruido en cada periodo
 }
 
@@ -51,6 +53,7 @@ export const DIFFICULTIES: Record<DifficultyId, DifficultyDef> = {
     searchTime: 2.0,
     stalkerSpeed: 1.10,
     stalkerDelay: 2.6,
+    tactics: 0,
     silentChance: 0.25,
   },
   normal: {
@@ -75,6 +78,7 @@ export const DIFFICULTIES: Record<DifficultyId, DifficultyDef> = {
     searchTime: 3,
     stalkerSpeed: 1.35,
     stalkerDelay: 1.8,
+    tactics: 1,
     silentChance: 0.4,
   },
   nightmare: {
@@ -99,6 +103,7 @@ export const DIFFICULTIES: Record<DifficultyId, DifficultyDef> = {
     searchTime: 3.5,
     stalkerSpeed: 1.45,
     stalkerDelay: 1.2,
+    tactics: 2,
     silentChance: 0.55,
   },
   oneLife: {
@@ -123,6 +128,7 @@ export const DIFFICULTIES: Record<DifficultyId, DifficultyDef> = {
     searchTime: 4,
     stalkerSpeed: 1.45,
     stalkerDelay: 1.2,
+    tactics: 2,
     silentChance: 0.6,
   },
 };

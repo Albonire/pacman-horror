@@ -168,6 +168,7 @@ export class Simulation {
       viewCells: this.diff.viewCells,
       fovCos: Math.cos((this.diff.fovDeg * Math.PI) / 360),
       hearCells: this.diff.hearCells,
+      tactics: this.diff.tactics,
     };
 
     this.respawnPlayer(true);

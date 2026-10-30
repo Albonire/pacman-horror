@@ -50,6 +50,8 @@ export class GhostSim {
   lastSeen: Cell | null = null;
   /** Segundos desde el ultimo avistamiento. */
   lostT = 0;
+  /** Direccion cardinal en la que iba el jugador cuando se le percibio por ultima vez (para predecir a donde va). */
+  lastHeading: Cell = [0, 0];
   /** True si el ultimo contacto fue visual (sin error de giro y con embestida segura). */
   sawPlayer = false;
 
@@ -110,6 +112,7 @@ export class GhostSim {
     this.lastSeen = null;
     this.lostT = 0;
     this.sawPlayer = false;
+    this.lastHeading = [0, 0];
     // mira hacia un pasillo abierto
     let best: Cell = [0, 1];
     for (const d of DIRS) if (maze.isWalkable(this.cx + d[0], this.cy + d[1])) { best = d; break; }
@@ -207,6 +210,8 @@ export interface AIContext {
   viewCells: number;
   fovCos: number; // coseno del semiangulo de vision
   hearCells: number;
+  /** 0 sin tacticas, 1 pinza al ver al jugador, 2 ademas prediccion de huida (por defecto 2). */
+  tactics?: 0 | 1 | 2;
 }
 
 

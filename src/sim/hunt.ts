@@ -3,7 +3,7 @@
 
 import { CELL } from "../config/constants";
 import type { AIContext, GhostSim } from "./ghost";
-import type { Cell, Maze } from "./maze";
+import { DIRS, type Cell, type Maze } from "./maze";
 
 /** Distancia (celdas) a la que notan al jugador aunque no lo esten mirando. */
 const CLOSE_SENSE = 1.6;
@@ -53,6 +53,7 @@ export function noticePlayer(g: GhostSim, ctx: AIContext, dt: number): void {
   if (sees || hears) {
     g.sawPlayer = sees;
     g.lastSeen = [ctx.playerCell[0], ctx.playerCell[1]];
+    g.lastHeading = [ctx.playerHeading[0], ctx.playerHeading[1]];
     g.lostT = 0;
     return;
   }
@@ -105,13 +106,67 @@ function flankTarget(g: GhostSim, ctx: AIContext, lead: number): Cell {
 }
 
 /**
- * Objetivo de persecucion. Con memoria activa va a la ultima posicion conocida
+ * Siguiente decision del jugador si sigue recto: avanza por el pasillo desde `from` en la direccion `heading`
+ * hasta el proximo cruce (celda con mas de una salida que no sea volver atras) o `maxSteps` celdas. Es donde
+ * hay que esperarlo para cortarle el paso.
+ */
+export function junctionAhead(maze: Maze, from: Cell, heading: Cell, maxSteps: number): Cell {
+  let x = from[0], y = from[1];
+  let dx = heading[0], dy = heading[1];
+  if (!dx && !dy) return from;
+  for (let i = 0; i < maxSteps; i++) {
+    const opts = DIRS.filter(([ox, oy]) => !(ox === -dx && oy === -dy) && maze.isWalkable(x + ox, y + oy));
+    if (opts.length === 0) return [x, y]; // callejon sin salida
+    if (opts.length > 1) return [x, y]; // cruce: aqui elige
+    [dx, dy] = opts[0];
+    x += dx; y += dy;
+  }
+  return [x, y];
+}
+
+/** Otros fantasmas peligrosos (que pueden matar) distintos de `g`. */
+function otherHunters(g: GhostSim, ctx: AIContext): GhostSim[] {
+  return ctx.ghosts.filter((o) => o !== g && o.lethal);
+}
+
+/**
+ * Objetivo cuando el fantasma ve al jugador ahora mismo. Ya no todos van directos al jugador: cada uno conserva su
+ * papel y se reparten el trabajo. El Acechador aprieta de frente; los demas se adelantan al siguiente cruce del
+ * jugador para cerrarle la salida cuando alguien ya lo tiene pegado ("pinza").
+ */
+function sightedTarget(g: GhostSim, ctx: AIContext): Cell {
+  const pc = ctx.playerCell;
+  const d = Math.hypot(g.cx - pc[0], g.cy - pc[1]);
+  if (d <= 2.5) return pc; // al alcance: siempre directo
+  const hunters = otherHunters(g, ctx);
+  const nearest = hunters.reduce((m, o) => Math.min(m, Math.hypot(o.cx - pc[0], o.cy - pc[1])), Infinity);
+  const covered = nearest <= 6 && d >= nearest + 2; // otro ya esta encima: yo corto la huida
+  const ahead = ctx.maze.nearestWalkable(junctionAhead(ctx.maze, pc, ctx.playerHeading, 5));
+  switch (g.kind) {
+    case 0: // Acechador: de frente, pero si otro lo adelanta se cuelga de la espalda
+      return covered ? ctx.maze.nearestWalkable(junctionAhead(ctx.maze, pc, [-ctx.playerHeading[0], -ctx.playerHeading[1]], 3)) : pc;
+    case 1: // Emboscadora: siempre al cruce de delante
+      return ahead;
+    case 2: // Resonador: flanquea al jugador usando al Acechador; si esta cubierto corta por delante
+      return covered ? ahead : ctx.playerNoisy ? pc : flankTarget(g, ctx, 2);
+    default: // Estatico: timido, mantiene su papel (ver chaseTarget)
+      return d > (ctx.playerNoisy ? 4 : 8) ? pc : g.corner;
+  }
+}
+
+/**
+ * Objetivo de persecucion. Viendo al jugador se reparten los papeles; con memoria va a la ultima posicion conocida
  * (y luego barre la zona); sin memoria usa el rol de cada fantasma.
  */
 export function chaseTarget(g: GhostSim, ctx: AIContext): Cell {
   const pc = ctx.playerCell;
+  const tactics = ctx.tactics ?? 2;
+  if (tactics >= 1 && g.sawPlayer && g.lastSeen) return sightedTarget(g, ctx);
   if (g.lastSeen) {
-    return g.lostT <= ctx.memory ? g.lastSeen : searchTarget(g, ctx);
+    if (g.lostT > ctx.memory) return searchTarget(g, ctx);
+    // la Emboscadora y el Resonador predicen a donde fue: siguen el pasillo desde donde lo vieron por ultima vez
+    if (tactics >= 2 && (g.kind === 1 || g.kind === 2)) return ctx.maze.nearestWalkable(junctionAhead(ctx.maze, g.lastSeen, g.lastHeading, 4));
+    return g.lastSeen;
   }
   switch (g.kind) {
     case 0: // El Acechador: llega por detras siguiendo el rastro
