@@ -50,13 +50,23 @@ export class GhostSim {
   lastSeen: Cell | null = null;
   /** Segundos desde el ultimo avistamiento. */
   lostT = 0;
+  /** Direccion cardinal en la que iba el jugador cuando se le percibio por ultima vez (para predecir a donde va). */
+  lastHeading: Cell = [0, 0];
   /** True si el ultimo contacto fue visual (sin error de giro y con embestida segura). */
   sawPlayer = false;
+
+  // sigilo: a veces el fantasma se acerca sin hacer ruido (y sin avisar con el pulso del jugador)
+  /** True mientras este fantasma se mueve en silencio. */
+  silent = false;
+  /** Segundos hasta volver a decidir si calla o hace ruido. */
+  silentT = 0;
+  private stealthSeed = 1;
 
   private field: Int16Array;
 
   constructor(kind: GhostKind, maze: Maze, spawn: Cell, corner: Cell) {
     this.kind = kind;
+    this.stealthSeed = 0x9e3779b1 * (kind + 1) >>> 0;
     this.spawn = spawn;
     this.corner = corner;
     this.cx = spawn[0];
@@ -67,6 +77,20 @@ export class GhostSim {
 
   get cell(): Cell { return [this.cx, this.cy]; }
   get active(): boolean { return this.mode !== "dormant"; }
+
+  /**
+   * Alterna periodos de ruido y de silencio. Usa su propia semilla (no el azar de la simulacion) para no
+   * alterar las partidas ya calibradas. En silencio no hay pasos ni respiracion ni latido que avisen.
+   */
+  updateStealth(dt: number, silentChance: number): void {
+    if (!this.lethal) { this.silent = false; this.silentT = 0; return; }
+    this.silentT -= dt;
+    if (this.silentT > 0) return;
+    this.stealthSeed = (Math.imul(this.stealthSeed, 1664525) + 1013904223) >>> 0;
+    const r = this.stealthSeed / 4294967296;
+    this.silent = r < silentChance;
+    this.silentT = 5 + ((this.stealthSeed >>> 8) & 255) / 255 * 8; // 5 a 13 s
+  }
   /** Puede matar al jugador. */
   get lethal(): boolean { return (this.mode === "scatter" || this.mode === "chase") && this.stun <= 0; }
 
@@ -88,6 +112,7 @@ export class GhostSim {
     this.lastSeen = null;
     this.lostT = 0;
     this.sawPlayer = false;
+    this.lastHeading = [0, 0];
     // mira hacia un pasillo abierto
     let best: Cell = [0, 1];
     for (const d of DIRS) if (maze.isWalkable(this.cx + d[0], this.cy + d[1])) { best = d; break; }
@@ -185,6 +210,8 @@ export interface AIContext {
   viewCells: number;
   fovCos: number; // coseno del semiangulo de vision
   hearCells: number;
+  /** 0 sin tacticas, 1 pinza al ver al jugador, 2 ademas prediccion de huida (por defecto 2). */
+  tactics?: 0 | 1 | 2;
 }
 
 

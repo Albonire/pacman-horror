@@ -19,7 +19,9 @@ import type { FaceKind } from "../gfx/faces";
 import type { SimEvent } from "../sim/events";
 import { rayDistance } from "../sim/collision";
 import { BITE_COOLDOWN, Simulation } from "../sim/simulation";
+import "./lightFix";
 import { ScareDirector } from "./director";
+import { EyesView } from "./eyesView";
 import { disposeFaceCache, GhostView } from "./ghostView";
 import { Input } from "./input";
 import { LevelView } from "./levelView";
@@ -31,6 +33,7 @@ import { FruitView } from "./props";
 import { Radar } from "./radar";
 import { CameraRig } from "./rig";
 import { ScareSystem } from "./scare";
+import { preloadScreamImages } from "./screamImages";
 import {
   clamp, DEFAULT_PROGRESS, DEFAULT_SETTINGS, saveProgress, saveSettings,
   type Progress, type Quality, type Settings,
@@ -109,6 +112,7 @@ export class Game {
   private sizeDpr = 1;
   private glow = new THREE.PointLight(0xffd23a, 2.2, 5, 2);
   private ghostLights: THREE.PointLight[] = [];
+  private eyes = new EyesView();
   private pelletLight = new THREE.PointLight(0xffa22e, 0, 9, 2);
 
   private raf = 0;
@@ -183,6 +187,7 @@ export class Game {
     this.scene.add(this.particles.points);
     this.scene.add(this.smoke.points);
     this.scene.add(this.fruit.group);
+    this.scene.add(this.eyes.group);
 
     this.pacman = new PacManBody();
     this.pacman.group.visible = false;
@@ -404,6 +409,7 @@ export class Game {
     this.pacman.dispose();
     this.jaws.dispose();
     this.fruit.dispose();
+    this.eyes.dispose();
     this.particles.dispose();
     this.smoke.dispose();
     for (const t of this.texCache.values()) { disposeTexSet(t.wall); disposeTexSet(t.floor); disposeTexSet(t.ceiling); }
@@ -460,6 +466,7 @@ export class Game {
     const tex = this.getTextures(theme);
     await nextFrame();
     if (this.disposed) return;
+    preloadScreamImages();
     this.view = new LevelView(this.sim, theme, tex, this.settings.quality);
     this.scene.add(this.view.group);
     for (const g of this.sim.ghosts) {
@@ -486,6 +493,7 @@ export class Game {
       setLightsMul: (v) => { this.lightsMul = v; },
       hudMessage: (t) => this.hud.message(t, 2, "warn"),
       darkness: () => this.darkness,
+      eyes: this.eyes,
     });
     this.applyTheme(theme);
     this.audio.setTheme(level.theme);
@@ -754,7 +762,10 @@ export class Game {
     this.tensionTimer -= dt;
     if (this.tensionTimer <= 0) {
       this.tensionTimer = 0.25;
-      const sources = sim.ghosts.filter((g) => g.lethal || g.startled).map((g) => g.cell);
+      // un fantasma que se mueve en silencio no sube la tension hasta que esta casi encima (~4 celdas)
+      const sources = sim.ghosts
+        .filter((g) => (g.lethal || g.startled) && (!g.silent || Math.hypot(g.x - sim.player.x, g.z - sim.player.z) < 4 * K.CELL))
+        .map((g) => g.cell);
       const pc = sim.maze.worldToCell(sim.player.x, sim.player.z);
       let t = 0;
       if (sources.length) {
@@ -763,7 +774,7 @@ export class Game {
         t = clamp(1 - d / 15, 0, 1);
         // linea de vision directa aumenta la tension
         for (const g of sim.ghosts) {
-          if (!g.lethal) continue;
+          if (!g.lethal || (g.silent && Math.hypot(g.x - sim.player.x, g.z - sim.player.z) > 4 * K.CELL)) continue;
           if (Math.hypot(g.x - sim.player.x, g.z - sim.player.z) < 18 && sim.maze.rayClear(sim.player.x, sim.player.z, g.x, g.z)) { t = Math.min(1, t + 0.3); break; }
         }
       }
@@ -1025,18 +1036,19 @@ export class Game {
     });
 
     // fantasmas
-    const order: { v: GhostView; d: number }[] = [];
+    const order: { v: GhostView; d: number; silent: boolean }[] = [];
     sim.ghosts.forEach((g, i) => {
       const gv = this.ghostViews[i];
       if (i === this.dyingGhost && this.phase === "dying") return;
       gv.update(dt, this.time, g, p.x, p.z, frightLow);
-      order.push({ v: gv, d: Math.hypot(g.x - p.x, g.z - p.z) });
+      const d = Math.hypot(g.x - p.x, g.z - p.z);
+      order.push({ v: gv, d, silent: g.silent && d > 4 });
     });
     order.sort((a, b) => a.d - b.d);
     for (let i = 0; i < this.ghostLights.length; i++) {
       const l = this.ghostLights[i];
       const o = order[i];
-      if (!o || o.v.lightIntensity <= 0) { l.intensity = 0; continue; }
+      if (!o || o.silent || o.v.lightIntensity <= 0) { l.intensity = 0; continue; }
       l.color.copy(o.v.glowColor);
       l.position.set(o.v.group.position.x, 1.5, o.v.group.position.z);
       l.intensity = o.v.lightIntensity;
@@ -1135,17 +1147,27 @@ export class Game {
     if (p.sonarOpen) inten *= 0.5;
     // un fantasma cerca interfiere con la linterna: titila mas cuanto mas cerca
     let nearest = 99;
-    for (const g of sim.ghosts) if (g.lethal) nearest = Math.min(nearest, Math.hypot(g.x - p.x, g.z - p.z));
+    for (const g of sim.ghosts) {
+      if (!g.lethal) continue;
+      const d = Math.hypot(g.x - p.x, g.z - p.z);
+      // en silencio la linterna solo delata al fantasma cuando ya esta casi encima
+      nearest = Math.min(nearest, g.silent && d > 3.5 ? 99 : d);
+    }
     if (nearest < 8) {
       const k = (8 - nearest) / 8;
       if (Math.sin(this.time * 47) + Math.sin(this.time * 23 + 1.3) > 1.7 - k * 1.7) inten *= 0.08;
     }
     // autoexposicion: la ley del inverso del cuadrado quema las paredes cercanas, asi que
     // se atenua el haz segun la distancia al muro que tiene delante
-    const [lfx, lfz] = p.forwardVec();
-    const wallD = rayDistance(sim.maze, p.x, p.z, lfx, lfz, 6);
+    // varios rayos a lo ancho del haz y segun la mirada (no el cuerpo): una pared lateral
+    // pegada a la camara tambien entra en el cono y es la que se quema
+    let wallD = 6;
+    for (const off of [-0.5, -0.25, 0, 0.25, 0.5]) {
+      const a = p.viewYaw + off;
+      wallD = Math.min(wallD, rayDistance(sim.maze, p.x, p.z, -Math.sin(a), -Math.cos(a), 6));
+    }
     this.headDist += (wallD - this.headDist) * Math.min(1, dt * 8);
-    inten *= clamp(Math.pow(this.headDist / 4.5, 2), 0.1, 1);
+    inten *= clamp(Math.pow(this.headDist / 4.5, 1.5), 0.18, 1);
     head.intensity = p.lightOn && this.phase !== "dying" ? inten : 0;
     this.glow.position.set(origin.x, K.EYE_H + 0.1, origin.z);
     this.glow.intensity = sim.powered ? 10 + Math.sin(this.time * 12) * 3 : 1.8;
@@ -1160,8 +1182,9 @@ export class Game {
     fx.time = this.time;
     const t = this.tension;
     fx.pulse = t > 0.2 ? this.heartPulse * t : 0;
-    fx.vignette = clamp((22 - p.battery) / 22, 0, 1) * 0.5 + (p.invuln > 0 ? 0.25 : 0) + this.darkness * 0.22 + (sim.hidden ? 0.4 : 0);
-    fx.desaturate = t * 0.28 + (p.exhausted ? 0.18 : 0);
+    const dd = this.scare.deathDark;
+    fx.vignette = clamp((22 - p.battery) / 22, 0, 1) * 0.5 + (p.invuln > 0 ? 0.25 : 0) + this.darkness * 0.22 + (sim.hidden ? 0.4 : 0) + dd;
+    fx.desaturate = Math.max(t * 0.28 + (p.exhausted ? 0.18 : 0), dd);
     fx.brightness = this.settings.brightness;
     fx.grain = 0.05 + t * 0.07;
     if (this.phase !== "dying" && this.phase !== "levelclear") fx.glitch = Math.max(fx.glitch, t * 0.06);
@@ -1222,7 +1245,7 @@ export class Game {
       dead: this.phase === "dying",
       dread: (this.settings.scares === "full" ? 1 : this.settings.scares === "reduced" ? 0.6 : 0.35) * (this.run ? DIFFICULTIES[this.run.diff].ambientScares : 1),
       ghosts: sim.ghosts.map((g) => ({
-        kind: g.kind, x: g.x, y: 1.4, z: g.z, mode: g.mode, frozen: g.frozen, startled: g.startled,
+        kind: g.kind, x: g.x, y: 1.4, z: g.z, mode: g.mode, frozen: g.frozen, startled: g.startled, silent: g.silent,
         dist: Math.hypot(g.x - p.x, g.z - p.z),
       })),
     };
@@ -1267,6 +1290,7 @@ export class Game {
   private setPhase(p: Phase): void {
     if (this.phase === p) return;
     this.phase = p;
+    this.audio.setMenuBed?.(p === "menu" || p === "briefing" || p === "loading");
     this.renderer.domElement.style.cursor = p === "playing" ? "crosshair" : "default";
     this.cb.onPhase(p);
   }

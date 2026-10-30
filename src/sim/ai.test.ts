@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CELL } from "../config/constants";
 import { GhostSim, type AIContext } from "./ghost";
-import { canHear, canSee, chaseTarget, noticePlayer, searchTarget } from "./hunt";
+import { canHear, canSee, chaseTarget, junctionAhead, noticePlayer, searchTarget } from "./hunt";
 import { Maze } from "./maze";
 import { Trail } from "./trail";
 
@@ -336,5 +336,48 @@ describe("Blinky stalker target calculation", () => {
     ghost.lastSeen = [1, 4];
     ghost.lostT = 0.5;
     expect(chaseTarget(ghost, ctx)).toEqual([1, 4]);
+  });
+
+  describe("reparto de papeles cuando ven al jugador", () => {
+    it("junctionAhead sigue el pasillo (y sus giros) hasta el limite de pasos", () => {
+      const maze = createTestMaze();
+      expect(junctionAhead(maze, [1, 5], [0, -1], 3)).toEqual([1, 2]);
+      // el pasillo gira al llegar a la fila 1 y sigue por ella
+      expect(junctionAhead(maze, [1, 5], [0, -1], 5)).toEqual([2, 1]);
+      expect(junctionAhead(maze, [1, 5], [0, 0], 5)).toEqual([1, 5]);
+    });
+
+    it("la Emboscadora que ve al jugador se adelanta a donde va, no a donde esta", () => {
+      const maze = createTestMaze();
+      const ghost = new GhostSim(1, maze, [1, 1], [1, 1]);
+      ghost.sawPlayer = true;
+      ghost.lastSeen = [1, 5];
+      const ctx = createAIContext(maze, { playerCell: [1, 5], playerHeading: [0, -1] });
+      expect(chaseTarget(ghost, ctx)).toEqual([2, 1]);
+    });
+
+    it("el Acechador que ve al jugador va directo; si otro ya lo tiene encima, se cuelga de su espalda", () => {
+      const maze = createTestMaze();
+      const blinky = new GhostSim(0, maze, [1, 1], [1, 1]);
+      blinky.sawPlayer = true;
+      blinky.lastSeen = [1, 5];
+      const ctx = createAIContext(maze, { playerCell: [1, 5], playerHeading: [0, -1], ghosts: [blinky] });
+      expect(chaseTarget(blinky, ctx)).toEqual([1, 5]);
+
+      const other = new GhostSim(1, maze, [1, 4], [1, 4]);
+      other.mode = "chase";
+      const covered = createAIContext(maze, { playerCell: [1, 5], playerHeading: [0, -1], ghosts: [blinky, other] });
+      // la espalda del jugador (que va al norte) es el sur: [1,6], [1,7] y el giro al este
+      expect(chaseTarget(blinky, covered)).toEqual([2, 7]);
+    });
+
+    it("al alcance (2,5 celdas o menos) todos van directos", () => {
+      const maze = createTestMaze();
+      const pinky = new GhostSim(1, maze, [1, 3], [1, 3]);
+      pinky.sawPlayer = true;
+      pinky.lastSeen = [1, 5];
+      const ctx = createAIContext(maze, { playerCell: [1, 5], playerHeading: [0, -1] });
+      expect(chaseTarget(pinky, ctx)).toEqual([1, 5]);
+    });
   });
 });

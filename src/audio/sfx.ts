@@ -150,6 +150,7 @@ export function wrap(S: Synth): void {
  */
 export function deathScream(S: Synth, kind: FaceKind, gain = 1): void {
   if (gain <= 0) return;
+  const g = Math.min(1, gain);
   const P = [
     { f0: 420, f1: 1850, formants: [[820, 2.6, 1.5], [1850, 3.2, 1.3], [3200, 4.0, 1.0], [4400, 5.0, 0.7]] as [number, number, number][], growl: true },
     { f0: 820, f1: 3100, formants: [[950, 2.8, 1.6], [2200, 3.4, 1.4], [3600, 4.2, 1.1], [4800, 5.0, 0.8]] as [number, number, number][], growl: false },
@@ -160,124 +161,62 @@ export function deathScream(S: Synth, kind: FaceKind, gain = 1): void {
   const hit = t0 + 0.38;
   const dur = 1.55;
 
-  // sub-bass impact at hit
-  S.tone({ f0: 92, f1: 20, t: hit, dur: 1.45, vol: 1.15 * Math.min(1, gain), a: 0.001 });
-  S.noise({ kind: "brown", lp: 300, t: hit, dur: 1.1, vol: 1.0 * Math.min(1, gain), a: 0.002 });
-  S.noise({ hp: 1100, t: hit, dur: 1.25, vol: 0.85 * Math.min(1, gain), a: 0.002, send: 0.4 });
+  // 1) aspiracion previa: el aire que entra justo antes del grito (sube y se corta en seco)
+  S.noise({ kind: "pink", bp: 380, bp1: 3400, q: 1.6, dur: 0.38, a: 0.34, vol: 0.5 * g, t: t0, send: 0.25 });
+  S.tone({ f0: 60, f1: 130, t: t0, dur: 0.38, a: 0.34, vol: 0.3 * g, lp: 240 });
 
-  // voice sample playback with filters or procedural formant fallback
-  const screamBuf = S.getScreamBuffer();
-  if (screamBuf) {
-    const src = S.ctx.createBufferSource();
-    src.buffer = screamBuf;
-    src.playbackRate.value = 0.93 + (kind % 4) * 0.035;
+  // 2) impacto
+  S.tone({ f0: 92, f1: 20, t: hit, dur: 1.6, vol: 0.95 * g, a: 0.001 });
+  S.noise({ kind: "brown", lp: 300, t: hit, dur: 1.2, vol: 0.85 * g, a: 0.002 });
+  S.noise({ hp: 1100, t: hit, dur: 1.25, vol: 0.7 * g, a: 0.002, send: 0.4 });
 
-    const hp = S.ctx.createBiquadFilter();
-    hp.type = "highpass";
-    hp.frequency.value = 85;
-
-    const eq = S.ctx.createBiquadFilter();
-    eq.type = "peaking";
-    eq.frequency.value = 3100;
-    eq.Q.value = 1.2;
-    eq.gain.value = 2.5;
-
-    const lp = S.ctx.createBiquadFilter();
-    lp.type = "lowpass";
-    lp.frequency.value = 9500;
-
-    const vol = Math.min(1.0, Math.max(0.1, 0.7 * gain * S.trim));
-    const screamGain = S.ctx.createGain();
-    screamGain.gain.setValueAtTime(0.0001, hit);
-    screamGain.gain.linearRampToValueAtTime(vol, hit + 0.012);
-    screamGain.gain.setValueAtTime(vol, hit + 1.85);
-    screamGain.gain.exponentialRampToValueAtTime(0.0001, hit + 2.25);
-
-    src.connect(hp);
-    hp.connect(eq);
-    eq.connect(lp);
-    lp.connect(screamGain);
-    S.out(screamGain, S.voice, 0.12);
-
-    src.start(hit);
-    src.stop(hit + 2.3);
+  // 3) voz: la muestra real en tres capas (principal, grave que se arrastra y aguda que chilla).
+  //    Cada fantasma la toca a otra altura. Sin muestra (aun decodificando) se sintetiza la voz.
+  const buf = S.getSample("scream");
+  if (buf) {
+    const base = 0.96 + (kind % 4) * 0.03;
+    const layer = (o: { at: number; rate: number; vol: number; hp: number; lp: number; send: number; holdTo: number; fadeTo: number; pan?: number }): void => {
+      const src = S.ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = o.rate;
+      const hp = S.ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = o.hp;
+      const eq = S.ctx.createBiquadFilter(); eq.type = "peaking"; eq.frequency.value = 3100; eq.Q.value = 1.2; eq.gain.value = 2.5;
+      const lp = S.ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = o.lp;
+      const env = S.ctx.createGain();
+      const v = Math.min(1, Math.max(0.05, o.vol * g * S.trim));
+      env.gain.setValueAtTime(0.0001, o.at);
+      env.gain.linearRampToValueAtTime(v, o.at + 0.012);
+      env.gain.setValueAtTime(v, o.at + o.holdTo);
+      env.gain.exponentialRampToValueAtTime(0.0001, o.at + o.fadeTo);
+      src.connect(hp); hp.connect(eq); eq.connect(lp); lp.connect(env);
+      if (o.pan !== undefined && typeof S.ctx.createStereoPanner === "function") {
+        const pn = S.ctx.createStereoPanner(); pn.pan.value = o.pan; env.connect(pn); S.out(pn, S.voice, o.send);
+      } else S.out(env, S.voice, o.send);
+      src.start(o.at);
+      src.stop(o.at + o.fadeTo + 0.05);
+    };
+    // principal: la muestra entera, con su cola natural
+    layer({ at: hit, rate: base, vol: 0.6, hp: 85, lp: 9500, send: 0.14, holdTo: buf.duration / base - 0.5, fadeTo: buf.duration / base + 0.05 });
+    // grave: mas lenta (casi una quinta por debajo), entra algo despues y se arrastra hasta apagarse. Alarga el grito
+    layer({ at: hit + 0.2, rate: base * 0.68, vol: 0.4, hp: 60, lp: 2600, send: 0.32, holdTo: 3.2, fadeTo: 5.3, pan: -0.25 });
+    // aguda: un coro desafinado que solo vive el primer tramo (el chillido de los dientes)
+    layer({ at: hit + 0.04, rate: base * 1.19, vol: 0.16, hp: 1500, lp: 9000, send: 0.2, holdTo: 1.5, fadeTo: 2.6, pan: 0.3 });
   } else {
-    // formant vocal synthesis strictly as fallback when sample buffer is null
-    S.formantVoice({
-      t: hit,
-      f0: P.f0,
-      f1: P.f1,
-      dur,
-      vol: 0.95 * Math.min(1, gain),
-      a: 0.005,
-      formants: P.formants,
-      dist: true,
-      vibRate: 36,
-      vibDepth: 120,
-      noiseMix: 0.4,
-      send: 0.4,
-    });
-
-    S.formantVoice({
-      t: hit + 0.02,
-      f0: P.f0 * 1.06,
-      f1: P.f1 * 0.92,
-      dur: dur * 0.9,
-      vol: 0.75 * Math.min(1, gain),
-      a: 0.01,
-      formants: P.formants,
-      dist: true,
-      vibRate: 42,
-      vibDepth: 140,
-      noiseMix: 0.35,
-      send: 0.45,
-    });
-
-    S.formantVoice({
-      t: hit,
-      f0: P.f0 * 0.5,
-      f1: P.f1 * 0.48,
-      dur: dur * 0.85,
-      vol: 0.65 * Math.min(1, gain),
-      a: 0.015,
-      formants: P.formants,
-      dist: true,
-      vibRate: 26,
-      vibDepth: 90,
-      noiseMix: 0.3,
-      send: 0.3,
-    });
-
+    // respaldo: sintesis de voz por formantes
+    S.formantVoice({ t: hit, f0: P.f0, f1: P.f1, dur, vol: 0.95 * g, a: 0.005, formants: P.formants, dist: true, vibRate: 36, vibDepth: 120, noiseMix: 0.4, send: 0.4 });
+    S.formantVoice({ t: hit + 0.02, f0: P.f0 * 1.06, f1: P.f1 * 0.92, dur: dur * 0.9, vol: 0.75 * g, a: 0.01, formants: P.formants, dist: true, vibRate: 42, vibDepth: 140, noiseMix: 0.35, send: 0.45 });
+    S.formantVoice({ t: hit, f0: P.f0 * 0.5, f1: P.f1 * 0.48, dur: dur * 0.85, vol: 0.65 * g, a: 0.015, formants: P.formants, dist: true, vibRate: 26, vibDepth: 90, noiseMix: 0.3, send: 0.3 });
     if (P.growl) {
-      S.formantVoice({
-        t: hit,
-        f0: 72,
-        f1: 42,
-        dur: 1.5,
-        vol: 0.8 * Math.min(1, gain),
-        formants: [[260, 3.5, 1.4], [780, 4.5, 1.0]],
-        dist: true,
-        vibRate: 48,
-        vibDepth: 160,
-        noiseMix: 0.45,
-      });
+      S.formantVoice({ t: hit, f0: 72, f1: 42, dur: 1.5, vol: 0.8 * g, formants: [[260, 3.5, 1.4], [780, 4.5, 1.0]], dist: true, vibRate: 48, vibDepth: 160, noiseMix: 0.45 });
     }
   }
 
-  // dry tinnitus tail and dying heartbeats between hit + 1.8s and hit + 2.5s
-  const tTail = hit + 1.8;
-  S.tone({ f0: 4180, t: tTail, dur: 1.4, vol: 0.1 * Math.min(1, gain), a: 0.02 });
-  for (let i = 0; i < 3; i++) {
-    S.tone({
-      f0: 54,
-      f1: 32,
-      t: tTail + 0.05 + i * 0.3,
-      dur: 0.2,
-      vol: (0.5 - i * 0.12) * Math.min(1, gain),
-      lp: 180,
-      a: 0.01,
-    });
-  }
+  // 4) agonia: el oido se cierra mientras la voz se apaga, y el corazon se frena
+  S.muffle(420, 3.4, 1.6, 1.2, hit + 0.9);
+  const tTail = hit + 1.9;
+  S.tone({ f0: 4180, t: tTail, dur: 3.4, vol: 0.07 * g, a: 0.6, lp: 6000 });
+  const beats = [0, 0.62, 1.34, 2.2, 3.28];
+  beats.forEach((d, i) => S.tone({ f0: 54 - i * 3, f1: 30, t: tTail + d, dur: 0.22 + i * 0.03, vol: (0.62 - i * 0.1) * g, lp: 170, a: 0.01 }));
 }
 
 /** Golpe de susto sincronizado con cada destello de la cara: acorde disonante, aire y sub-grave. */
