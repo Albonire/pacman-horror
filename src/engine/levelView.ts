@@ -28,6 +28,8 @@ interface FixtureState {
   /** Zona oscura a la que pertenece (-1 ninguna) y si esta en su borde (parpadea en vez de apagarse del todo). */
   zone: number;
   edge: boolean;
+  /** Zona mas cercana para apagones generales de sector (con radio ampliado). */
+  sectorZone: number;
 }
 
 export interface PelletView {
@@ -51,6 +53,12 @@ export interface LevelViewUpdate {
   exitUnlocked: boolean;
   /** Segundos de luz que le quedan a cada zona oscura. */
   zoneLit: readonly number[];
+  /** Segundos restantes de parpadeo previo a un apagon de zona. */
+  zoneFlicker?: readonly number[];
+  /** Zonas en apagon general de sector. */
+  sectorOutage?: readonly boolean[];
+  /** Estado de las valvulas de vapor dinamicas. */
+  steamVents?: readonly { state: "idle" | "warning" | "erupting" }[];
   /** Fantasmas peligrosos: apagan y hacen parpadear las luminarias cercanas. */
   ghosts: readonly { x: number; z: number }[];
   /** Escondite ocupado (indice) o -1. */
@@ -96,11 +104,13 @@ export class LevelView {
   private poolSize: number;
   private dustBase: Float32Array;
   private lastOrderT = -1;
+  private walls: THREE.Mesh;
   private wallMat: THREE.MeshStandardMaterial;
   private waterMat: THREE.MeshStandardMaterial | null = null;
   private waterNormal: THREE.Texture | null = null;
   private screens: THREE.MeshBasicMaterial[] = [];
   private glands: THREE.Mesh[] = [];
+  private steamValveMats: THREE.MeshBasicMaterial[] = [];
   /** Salidas de vapor (Subsuelo): el Game emite humo desde aqui. */
   vents: { x: number; z: number }[] = [];
 
@@ -132,6 +142,7 @@ export class LevelView {
     walls.castShadow = true;
     walls.receiveShadow = true;
     this.group.add(walls);
+    this.walls = walls;
     this.wallMat = wallMat;
 
     // ---- agua baja sobre el suelo (Piscinas) ----
@@ -163,6 +174,7 @@ export class LevelView {
     this.glands = props.glands;
     this.interact = new InteractViews(sim);
     this.group.add(this.interact.group);
+    this.buildSteamValves(sim);
 
     // ---- cortinas del tunel (vacio oscuro al final de cada conector) ----
     const curtainMat = new THREE.ShaderMaterial({
@@ -274,13 +286,14 @@ export class LevelView {
       const dead = rng() < theme.deadChance;
       const broken = !dead && rng() < theme.brokenChance;
       const col = new THREE.Color(theme.fixtureColors ? theme.fixtureColors[Math.floor(rng() * theme.fixtureColors.length)] : theme.fixtureColor);
-      let zone = -1, edge = false;
+      let zone = -1, edge = false, sectorZone = -1;
       sim.layout.zones.forEach((z, zi) => {
         const zw = maze.cellToWorld(z.cell[0], z.cell[1]);
         const d = Math.hypot(zw.x - sp.x, zw.z - sp.z) / CELL;
         if (d <= z.r + 0.5 && zone < 0) { zone = zi; edge = d > z.r - 0.9; }
+        if (d <= z.r * 1.85 + 0.5 && sectorZone < 0) { sectorZone = zi; }
       });
-      this.fixtures.push({ x: sp.x, z: sp.z, dead, broken, phase: rng() * 6.28, speed: 5 + rng() * 9, level: 1, color: col, baseColor: col.clone(), zone, edge });
+      this.fixtures.push({ x: sp.x, z: sp.z, dead, broken, phase: rng() * 6.28, speed: 5 + rng() * 9, level: 1, color: col, baseColor: col.clone(), zone, edge, sectorZone });
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), sp.alongX ? 0 : Math.PI / 2);
       this.tmpM.compose(new THREE.Vector3(sp.x, orb ? WALL_H - 0.5 : WALL_H - 0.045, sp.z), q, s);
       glow.setMatrixAt(i, this.tmpM);
@@ -331,6 +344,56 @@ export class LevelView {
     return { group, core, halo, rings, x, z, eaten: false, fade: 1 };
   }
 
+  private buildSteamValves(sim: Simulation): void {
+    if (!sim.steamVents.length) return;
+    const pipeMat = new THREE.MeshStandardMaterial({ color: 0x4b3b30, roughness: 0.65, metalness: 0.55 });
+    const nozzleMat = new THREE.MeshStandardMaterial({ color: 0x2c241e, roughness: 0.5, metalness: 0.7 });
+    const pipeGeo = new THREE.CylinderGeometry(0.055, 0.055, WALL_H, 8);
+    const nozzleGeo = new THREE.CylinderGeometry(0.08, 0.06, 0.22, 8);
+    const gaugeGeo = new THREE.SphereGeometry(0.055, 8, 6);
+
+    for (const v of sim.steamVents) {
+      const g = new THREE.Group();
+      const wx = v.x + v.wall[0] * (CELL * 0.43);
+      const wz = v.z + v.wall[1] * (CELL * 0.43);
+      g.position.set(wx, 0, wz);
+
+      const pipe = new THREE.Mesh(pipeGeo, pipeMat);
+      pipe.position.y = WALL_H / 2;
+      g.add(pipe);
+
+      const nozzle = new THREE.Mesh(nozzleGeo, nozzleMat);
+      nozzle.position.set(-v.wall[0] * 0.08, 1.15, -v.wall[1] * 0.08);
+      nozzle.rotation.z = v.wall[0] * (Math.PI / 2);
+      nozzle.rotation.x = -v.wall[1] * (Math.PI / 2);
+      g.add(nozzle);
+
+      const indMat = new THREE.MeshBasicMaterial({ color: 0x3a281c });
+      const gauge = new THREE.Mesh(gaugeGeo, indMat);
+      gauge.position.set(-v.wall[0] * 0.14, 1.32, -v.wall[1] * 0.14);
+      g.add(gauge);
+      this.steamValveMats.push(indMat);
+      this.group.add(g);
+    }
+  }
+
+  /** Reconstruye la malla 3D de muros cuando un pasillo cambia de estructura (geometria no euclidiana). */
+  rebuildWalls(maze: Simulation["maze"]): void {
+    this.walls.geometry.dispose();
+    this.walls.geometry = buildWallGeometry(maze, { withConnectors: true });
+  }
+
+  /** Reubica un nodo si un cambio de pasillo lo traslado a la nueva abertura. */
+  moveDot(fromCellIndex: number, toCellIndex: number, x: number, z: number): void {
+    const i = this.dotIndex.get(fromCellIndex);
+    if (i === undefined) return;
+    this.dotIndex.delete(fromCellIndex);
+    this.dotIndex.set(toCellIndex, i);
+    this.tmpM.makeTranslation(x, 0.46, z);
+    this.dots.setMatrixAt(i, this.tmpM);
+    this.dots.instanceMatrix.needsUpdate = true;
+  }
+
   eatDot(cellIndex: number): void {
     const i = this.dotIndex.get(cellIndex);
     if (i === undefined) return;
@@ -348,6 +411,21 @@ export class LevelView {
     this.interact.update(u.time, u.zoneLit, u.hiddenIndex);
     const t = u.time;
 
+    if (u.steamVents) {
+      for (let i = 0; i < this.steamValveMats.length && i < u.steamVents.length; i++) {
+        const st = u.steamVents[i].state;
+        const m = this.steamValveMats[i];
+        if (st === "erupting") {
+          m.color.setHex(0xff4818);
+        } else if (st === "warning") {
+          const blink = Math.sin(t * 28 + i) > 0 ? 0xffb020 : 0x552208;
+          m.color.setHex(blink);
+        } else {
+          m.color.setHex(0x3a281c);
+        }
+      }
+    }
+
     // fluctuacion de luminarias
     const mesh = this.fixtureMesh;
     for (let i = 0; i < this.fixtures.length; i++) {
@@ -361,10 +439,18 @@ export class LevelView {
       } else {
         lv = 0.94 + 0.06 * Math.sin(t * 100 + f.phase);
       }
-      if (f.zone >= 0 && !f.dead) {
-        const lit = u.zoneLit[f.zone] ?? 0;
+      const sz = f.sectorZone;
+      const flickering = sz >= 0 && (u.zoneFlicker?.[sz] ?? 0) > 0;
+      const outage = sz >= 0 && (u.sectorOutage?.[sz] ?? false);
+
+      if (flickering && !f.dead) {
+        f.color.copy(f.baseColor);
+        lv *= hash2(Math.floor(t * 36), i, 13) > 0.48 ? 1.15 : 0.04;
+      } else if ((f.zone >= 0 || outage) && !f.dead) {
+        const zIdx = f.zone >= 0 ? f.zone : sz;
+        const lit = u.zoneLit[zIdx] ?? 0;
         if (lit <= 0) {
-          // luz de emergencia tenue y roja en las zonas oscuras
+          // luz de emergencia tenue y roja en las zonas oscuras o en apagon de sector
           const pulse = 0.5 + 0.5 * Math.sin(t * 2.6 + f.phase);
           lv = f.edge ? 0.08 + 0.12 * pulse : 0.04 + 0.08 * pulse;
           f.color.setHex(0xb82818);
@@ -384,7 +470,7 @@ export class LevelView {
         // apagon: tenue luz de emergencia de evacuacion
         f.color.setHex(0xa62014);
         lv = Math.max(lv, 0.06 + 0.08 * (0.5 + 0.5 * Math.sin(t * 3.2 + f.phase)));
-      } else if (f.zone < 0 || (u.zoneLit[f.zone] ?? 0) > 0) {
+      } else if (!flickering && !outage && (f.zone < 0 || (u.zoneLit[f.zone] ?? 0) > 0)) {
         f.color.copy(f.baseColor);
       }
       if (u.powered) lv = lv * 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(t * 9 + f.phase));

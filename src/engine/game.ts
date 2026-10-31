@@ -65,7 +65,7 @@ interface RunState {
   deaths: number;
 }
 
-const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+const nextFrame = () => new Promise<void>((r) => setTimeout(r, 0));
 
 export class Game {
   readonly container: HTMLElement;
@@ -74,7 +74,7 @@ export class Game {
   readonly rig: CameraRig;
   readonly input: Input;
   readonly particles = new ParticlePool(480);
-  private smoke = new ParticlePool(220, false);
+  private smoke = new ParticlePool(380, false);
   readonly fx: FxState = defaultFx();
 
   audio: GameAudio;
@@ -122,6 +122,8 @@ export class Game {
   private pelletLight = new THREE.PointLight(0xffa22e, 0, 9, 2);
 
   private raf = 0;
+  private timer = 0;
+  private isSoftwareGl = false;
   private last = 0;
   private time = 0;
   private disposed = false;
@@ -143,6 +145,7 @@ export class Game {
   private distField: Int16Array | null = null;
   private heartAcc = 0;
   private heartPulse = 0;
+  private exhaustFx = 0;
   private hitStop = 0;
   private outroT = -1;
   private dyingGhost = -1;
@@ -171,9 +174,17 @@ export class Game {
 
     const w = Math.max(2, this.container.clientWidth), h = Math.max(2, this.container.clientHeight);
     this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance", alpha: false });
+    try {
+      const gl = this.renderer.getContext();
+      const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+      const r = String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+      this.isSoftwareGl = /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(r);
+    } catch {
+      this.isSoftwareGl = false;
+    }
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.style.display = "block";
     this.renderer.domElement.tabIndex = 0;
@@ -194,6 +205,7 @@ export class Game {
       this.scene.add(l);
     }
     this.scene.add(this.particles.points);
+    this.smoke.material.uniforms.uSoft.value = 0.02;
     this.scene.add(this.smoke.points);
     this.scene.add(this.fruit.group);
     this.scene.add(this.eyes.group);
@@ -204,7 +216,7 @@ export class Game {
     this.jaws = new PovJaws(w / h);
 
     // post-proceso
-    const target = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: 4 });
+    const target = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: this.isSoftwareGl ? 0 : 4 });
     this.composer = new EffectComposer(this.renderer, target);
     this.composer.addPass(new RenderPass(this.scene, this.rig.camera));
     this.sanitize = makeSanitizePass();
@@ -253,9 +265,9 @@ export class Game {
 
     if (!this.manual) {
       this.last = performance.now();
-      this.raf = requestAnimationFrame(this.frame);
+      this.scheduleNextFrame();
     }
-    if (typeof window !== "undefined" && (new URLSearchParams(window.location.search).has("debug"))) {
+    if (typeof window !== "undefined") {
       (window as unknown as { __umbral: Game }).__umbral = this;
     }
   }
@@ -264,8 +276,16 @@ export class Game {
   // API publica
   // =====================================================================================
 
-  /** Prepara el fondo del menu (nivel 0 sin partida). */
+  /** Prepara el fondo del menu (nivel 0 sin partida), o entra directo si ?autostart=1. */
   async boot(): Promise<void> {
+    const autostart = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("autostart") === "1";
+    if (autostart) {
+      this.progress = { ...this.progress, warningAccepted: true };
+      saveProgress(this.progress);
+      await this.startRun("normal", 0);
+      this.enterLevel();
+      return;
+    }
     await this.loadLevel(0, "normal", null);
     this.setPhase("menu");
   }
@@ -392,11 +412,11 @@ export class Game {
     this.audio.setVolume(s.volume);
     this.audio.setMuted(s.muted);
     this.scare.level = s.scares;
-    const q = s.quality;
+    const q: Quality = this.isSoftwareGl ? "low" : s.quality;
     const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
     this.sizeDpr = dpr;
     // escala base de resolucion por calidad (en GPU integrada el relleno de pixeles es el cuello de botella)
-    this.baseScale = q === "high" ? Math.min(dpr, 1.5) : q === "medium" ? Math.min(dpr, 1) : 0.7;
+    this.baseScale = this.isSoftwareGl ? 0.5 : q === "high" ? Math.min(dpr, 1.5) : q === "medium" ? Math.min(dpr, 1) : 0.7;
     if (!s.dynamicRes) this.resScale = 1;
     this.applyResolution(false);
     // MSAA solo en alta (x4) y media (x2); en baja el render target es sencillo
@@ -430,6 +450,7 @@ export class Game {
   dispose(): void {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
+    clearTimeout(this.timer);
     this.resizeObs.disconnect();
     document.removeEventListener("visibilitychange", this.onVisibility);
     document.removeEventListener("fullscreenchange", this.onFullscreen);
@@ -558,7 +579,8 @@ export class Game {
     this.rig.pitch = 0;
     this.rig.override = null;
     this.rig.trauma = 0;
-    this.fx.blackout = 0; this.fx.staticNoise = 0; this.fx.flash = 0; this.fx.glitch = 0;
+    this.exhaustFx = 0;
+    this.fx.blackout = 0; this.fx.staticNoise = 0; this.fx.flash = 0; this.fx.glitch = 0; this.fx.blur = 0;
     this.rig.mode = "fp";
     this.pacman.group.visible = false;
     this.director?.reset(28);
@@ -621,15 +643,26 @@ export class Game {
   // Bucle
   // =====================================================================================
 
+  private scheduleNextFrame(): void {
+    if (this.disposed || this.manual) return;
+    if (this.isSoftwareGl) {
+      this.timer = window.setTimeout(() => {
+        if (!this.disposed) this.raf = requestAnimationFrame(this.frame);
+      }, 32);
+    } else {
+      this.raf = requestAnimationFrame(this.frame);
+    }
+  }
+
   private frame = (now: number): void => {
     if (this.disposed) return;
-    this.raf = requestAnimationFrame(this.frame);
     const raw = Math.max(0, (now - this.last) / 1000);
     const real = Math.min(this.phase === "dying" || this.phase === "levelclear" || this.phase === "victory" ? 0.25 : 0.1, raw);
     this.last = now;
     this.watchPerformance(raw);
     this.checkSize();
     this.advance(real);
+    this.scheduleNextFrame();
   };
 
   /** Aplica `baseScale * resScale` como relacion de pixeles del render (y reajusta el tamano si `resize`). */
@@ -718,7 +751,7 @@ export class Game {
     const wdt = this.phase === "paused" ? 0 : dt;
     this.updateViews(wdt);
     this.updateCameraAndLights(wdt);
-    this.updateFx();
+    this.updateFx(wdt);
     this.updateHud();
     if (renderFrame) this.render(wdt);
   }
@@ -770,7 +803,12 @@ export class Game {
       }
     }
     const ih = sim.interactHint;
-    const interactHint = ih === "hide" ? "E: esconderte" : ih === "switch" ? "E: encender la luz (hace ruido)" : ih === "leave" ? null : null; // dentro del armario la ayuda va en la etiqueta inferior, no en el centro
+    const hideKind = sim.interactHideKind;
+    const hideLabel =
+      hideKind === "vent" ? "E: meterte en el conducto" :
+      hideKind === "table" ? "E: esconderte bajo la mesa" :
+      "E: esconderte en el armario";
+    const interactHint = ih === "hide" ? hideLabel : ih === "switch" ? "E: encender la luz (hace ruido)" : ih === "leave" ? null : null; // dentro del escondite la ayuda va en la etiqueta inferior, no en el centro
     if (this.input.needsLock && !this.input.locked) {
       this.lockHintT += dt;
       if (interactHint) this.hud.showHint(interactHint);
@@ -780,12 +818,14 @@ export class Game {
     }
 
     if (sim.hidden) {
-      // asomado por las ranuras: la mirada queda limitada al hueco
+      // el angulo de vision depende del tipo de escondite (armario estrecho, conducto medio, mesa panoramica)
       const base = Math.atan2(sim.hidden.wall[0], sim.hidden.wall[1]);
       let rel = p.yaw - base;
       rel = Math.atan2(Math.sin(rel), Math.cos(rel));
-      p.yaw = base + clamp(rel, -0.62, 0.62);
-      this.rig.pitch = clamp(this.rig.pitch, -0.4, 0.4);
+      const yawLim = sim.hideYawLimit(sim.hidden.kind);
+      const pitchLim = sim.hidden.kind === "vent" ? 0.28 : sim.hidden.kind === "table" ? 0.35 : 0.4;
+      p.yaw = base + clamp(rel, -yawLim, yawLim);
+      this.rig.pitch = clamp(this.rig.pitch, -pitchLim, pitchLim);
     }
     sim.update(dt, { forward: axes.forward, strafe: axes.strafe, sprint: this.input.sprint, sonar: this.input.sonar, bite: this.biteReq, interact: this.interactReq, lookBack: this.input.lookBack });
     this.biteReq = false; this.interactReq = false;
@@ -886,10 +926,11 @@ export class Game {
 
   private updateHeartbeat(dt: number): void {
     const t = this.tension;
-    const ex = 1 - this.sim!.player.stamina / K.STAMINA_MAX;
-    const level = Math.max(t, ex * 0.55);
+    const p = this.sim!.player;
+    const ex = 1 - p.stamina / K.STAMINA_MAX;
+    const level = Math.max(t, p.exhausted ? 0.96 : ex * 0.65);
     if (level > 0.22) {
-      this.heartAcc += dt * (1.0 + level * 2.1);
+      this.heartAcc += dt * (1.0 + level * (p.exhausted ? 2.45 : 2.1));
       if (this.heartAcc >= 1) {
         this.heartAcc -= 1;
         this.audio.playHeartbeat(level);
@@ -1006,9 +1047,26 @@ export class Game {
           this.rig.addTrauma(0.25);
           this.hud.message("Te falta el aire", 1.6, "warn");
           break;
-        case "hide":
+        case "hide": {
           this.audio.playHide(e.inside);
-          if (e.inside) this.hud.message(e.seen ? "Te vieron entrar. No respires" : "Contén la respiración", 2.6, e.seen ? "warn" : "info");
+          if (e.inside) {
+            const spotMsg =
+              e.kind === "vent" ? "Conducto bajo: discreto · mantén el pulso con [Espacio]" :
+              e.kind === "table" ? "Bajo la mesa: vista amplia · mantén el pulso con [Espacio]" :
+              "En el armario: mantén el pulso con [Espacio]";
+            this.hud.message(e.seen ? "¡Te vieron esconderte! Sal o prepárate" : spotMsg, 2.6, e.seen ? "warn" : "info");
+          }
+          break;
+        }
+        case "heartBeat":
+          if (e.result === "hit") {
+            this.audio.playHeartbeat(0.55);
+            this.heartPulse = 0.85;
+          } else {
+            this.audio.playHeartbeat(0.95);
+            this.rig.addTrauma(0.14);
+            this.fx.aberration = Math.max(this.fx.aberration, 0.35);
+          }
           break;
         case "bite":
           if (e.stunned > 0) {
@@ -1018,6 +1076,59 @@ export class Game {
             this.hud.message("Los dientes lo aturden", 1.6, "good");
           } else if (e.eaten === 0) this.hud.message("Muerdes el aire", 1.2, "warn");
           break;
+        case "steamWarning": {
+          const d = Math.hypot(e.x - sim.player.x, e.z - sim.player.z);
+          if (d < 18) this.audio.playSteamWarning(e.x, 1.2, e.z);
+          break;
+        }
+        case "steamErupt": {
+          const d = Math.hypot(e.x - sim.player.x, e.z - sim.player.z);
+          if (d < 22) {
+            this.audio.playSteamBurst(e.x, 1.2, e.z);
+            for (let k = 0; k < 14; k++) {
+              this.smoke.emit(
+                e.x + (Math.random() - 0.5) * 0.5, 0.8 + Math.random() * 0.7, e.z + (Math.random() - 0.5) * 0.5,
+                (Math.random() - 0.5) * 1.4, 0.4 + Math.random() * 0.8, (Math.random() - 0.5) * 1.4,
+                2.0 + Math.random() * 1.0, 0.68 + Math.random() * 0.35, 0x9c968e, -0.04, 0.85,
+              );
+            }
+          }
+          if (d < 7.5 && !sim.hidden) {
+            this.rig.addTrauma(0.22);
+            this.hud.message("¡Fuga de vapor a presión!", 2.0, "warn");
+          }
+          break;
+        }
+        case "steamHurt":
+          this.audio.playSteamCough();
+          this.rig.addTrauma(0.24);
+          this.hud.flash("#ffd4b8", 0.22, 0.45);
+          this.hud.message("El vapor hirviendo te ahoga y empaña la vista", 1.8, "warn");
+          break;
+        case "zoneFlicker":
+          this.audio.playSteamWarning(e.x, 1.5, e.z);
+          this.fx.glitch = Math.max(this.fx.glitch, 0.35);
+          this.hud.message("Sobrecarga en el sector: las luces tiemblan...", 2.2, "warn");
+          break;
+        case "zoneBlackout":
+          this.audio.playBreakerTrip(e.x, 1.5, e.z);
+          this.rig.addTrauma(0.28);
+          this.fx.glitch = Math.max(this.fx.glitch, 0.55);
+          this.particles.burst(e.x, 1.35, e.z, 22, 2.4, 0.6, 0.06, 0xffb84a, 1.4);
+          this.hud.message("Apagón general de zona: busca el interruptor [E]", 3.4, "warn");
+          break;
+        case "mazeShift": {
+          view.rebuildWalls(sim.maze);
+          const fromIdx = e.closed[1] * sim.maze.W + e.closed[0];
+          const toIdx = e.opened[1] * sim.maze.W + e.opened[0];
+          view.moveDot(fromIdx, toIdx, e.x, e.z);
+          this.audio.playMazeShift(e.x, 1.2, e.z);
+          this.rig.addTrauma(0.18);
+          this.fx.aberration = Math.max(this.fx.aberration, 0.55);
+          this.fx.glitch = Math.max(this.fx.glitch, 0.38);
+          this.hud.message("El laberinto se ha retorcido a tus espaldas...", 2.8, "info");
+          break;
+        }
       }
     }
   }
@@ -1136,6 +1247,9 @@ export class Game {
       time: this.time, dt, playerX: p.x, playerZ: p.z,
       lightsMul: this.lightsMul, powered: sim.powered, exitUnlocked: sim.exitUnlocked,
       zoneLit: sim.zoneLit,
+      zoneFlicker: sim.zoneFlicker,
+      sectorOutage: sim.sectorOutage,
+      steamVents: sim.steamVents,
       ghosts: sim.ghosts.filter((g) => g.lethal).map((g) => ({ x: g.x, z: g.z })),
       hiddenIndex: sim.hidden ? sim.hideSpots.indexOf(sim.hidden) : -1,
     });
@@ -1180,7 +1294,7 @@ export class Game {
       this.hemi.intensity = th.hemiIntensity * (1 - 0.82 * this.darkness);
       this.ambient.intensity = th.ambientIntensity * (1 - 0.8 * this.darkness);
       const fog = this.scene.fog as THREE.FogExp2 | null;
-      if (fog) fog.density = th.fogDensity * (1 + 0.8 * this.darkness);
+      if (fog) fog.density = th.fogDensity * (1 + 0.8 * this.darkness + sim.steamExposure * 1.4);
     }
 
     // fruta
@@ -1204,6 +1318,43 @@ export class Game {
         this.smoke.emit(v.x + (Math.random() - 0.5) * 0.2, 0.4, v.z + (Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.5, 0.7 + Math.random() * 0.6, (Math.random() - 0.5) * 0.5, 2.6, 0.9, 0xb4aca4, -0.05, 0.7);
       }
     }
+    // Valvulas dinamicas de vapor en los pasillos
+    for (const sv of sim.steamVents) {
+      if (sv.state === "idle") continue;
+      const dist = Math.hypot(sv.x - p.x, sv.z - p.z);
+      if (dist > 20) continue;
+      const nx = sv.x + sv.wall[0] * (K.CELL * 0.34);
+      const nz = sv.z + sv.wall[1] * (K.CELL * 0.34);
+      if (sv.state === "warning") {
+        if (Math.random() < dt * 16) {
+          this.smoke.emit(
+            nx, 1.15 + (Math.random() - 0.5) * 0.12, nz,
+            -sv.wall[0] * (1.2 + Math.random() * 0.8) + (Math.random() - 0.5) * 0.4,
+            0.25 + Math.random() * 0.4,
+            -sv.wall[1] * (1.2 + Math.random() * 0.8) + (Math.random() - 0.5) * 0.4,
+            1.1, 0.55, 0xc8c0b8, -0.05, 1.1,
+          );
+        }
+      } else if (sv.state === "erupting") {
+        const rate = Math.ceil(dt * 38);
+        for (let k = 0; k < rate; k++) {
+          if (Math.random() > dt * 34 && k > 0) continue;
+          this.smoke.emit(
+            nx + (Math.random() - 0.5) * 0.32,
+            0.75 + Math.random() * 0.85,
+            nz + (Math.random() - 0.5) * 0.32,
+            -sv.wall[0] * (1.5 + Math.random() * 1.2) + (Math.random() - 0.5) * 0.8,
+            (Math.random() - 0.35) * 0.75,
+            -sv.wall[1] * (1.5 + Math.random() * 1.2) + (Math.random() - 0.5) * 0.8,
+            1.7 + Math.random() * 0.9,
+            0.65 + Math.random() * 0.38,
+            0xa49e96,
+            -0.03,
+            0.9,
+          );
+        }
+      }
+    }
   }
 
   private updateCameraAndLights(dt: number): void {
@@ -1211,6 +1362,7 @@ export class Game {
     const p = sim.player;
     const exertion = clamp(1 - p.stamina / K.STAMINA_MAX, 0, 1) * (p.running || p.exhausted ? 1 : 0.5);
     this.rig.forceFp = !!sim.hidden;
+    this.rig.targetEyeH = sim.hidden ? sim.hideEyeHeight(sim.hidden.kind) : K.EYE_H;
     if (sim.hidden && sim.hideThreat > 0.5) this.rig.trauma = Math.max(this.rig.trauma, (sim.hideThreat - 0.5) * 0.3); // tiemblas
     if (this.phase === "playing" || this.phase === "paused" || this.phase === "levelclear") {
       this.rig.update(dt, p, sim.maze, { exertion, tension: this.tension, frozen: false });
@@ -1281,20 +1433,30 @@ export class Game {
     this.glow.distance = sim.powered ? 9 : 4.5;
   }
 
-  private updateFx(): void {
+  private updateFx(dt = 0): void {
     const sim = this.sim!;
     const p = sim.player;
     const fx = this.fx;
     fx.time = this.time;
     const t = this.tension;
-    fx.pulse = t > 0.2 ? this.heartPulse * t : 0;
+    const exTarget = p.exhausted ? 1 : clamp((0.28 - p.stamina / K.STAMINA_MAX) / 0.28, 0, 0.58) * (p.running ? 1 : 0.6);
+    const exRate = exTarget > this.exhaustFx ? 4.5 : 2.2;
+    this.exhaustFx += (exTarget - this.exhaustFx) * (dt > 0 ? Math.min(1, dt * exRate) : 1);
+    const ex = this.exhaustFx;
+    fx.pulse = Math.max(t > 0.2 ? this.heartPulse * t : 0, ex * (0.42 + 0.58 * this.heartPulse));
     const dd = this.scare.deathDark;
-    fx.vignette = clamp((22 - p.battery) / 22, 0, 1) * 0.5 + (p.invuln > 0 ? 0.25 : 0) + this.darkness * 0.22 + (sim.hidden ? 0.4 : 0) + dd;
-    fx.desaturate = Math.max(t * 0.28 + (p.exhausted ? 0.18 : 0), dd);
+    const st = sim.steamExposure;
+    fx.blur = clamp(ex * 0.88 + (sim.hidden ? sim.hideThreat * 0.22 : 0) + st * 0.28, 0, 1);
+    fx.vignette = clamp((22 - p.battery) / 22, 0, 1) * 0.5 + (p.invuln > 0 ? 0.25 : 0) + this.darkness * 0.22 + (sim.hidden ? 0.4 : 0) + st * 0.48 + ex * 0.52 + dd;
+    fx.desaturate = Math.max(t * 0.28 + ex * 0.34 + st * 0.45, dd);
+    if (st > 0.05) {
+      fx.flashColor = [0.85, 0.82, 0.78];
+      fx.flash = Math.max(fx.flash, st * 0.26);
+    }
     fx.brightness = this.settings.brightness;
-    fx.grain = 0.05 + t * 0.07;
+    fx.grain = 0.05 + t * 0.07 + st * 0.05 + ex * 0.04;
     if (this.phase !== "dying" && this.phase !== "levelclear") fx.glitch = Math.max(fx.glitch, t * 0.06);
-    fx.aberration = Math.max(fx.aberration, t * 0.25 + (this.time - this.lastWrapT < 0.25 ? 0.6 : 0));
+    fx.aberration = Math.max(fx.aberration, t * 0.25 + st * 0.35 + ex * 0.28 + (this.time - this.lastWrapT < 0.25 ? 0.6 : 0));
   }
 
   /** Angulo de la salida respecto a la mirada (null si no esta abierta, esta cerca o el jugador esta escondido). */
@@ -1329,8 +1491,14 @@ export class Game {
       powerLow: sim.powered && sim.frightTimer < 2.2,
       camera: this.rig.mode,
       hidden: !!sim.hidden,
+      hideKind: sim.hidden ? sim.hidden.kind : null,
       holding: sim.holdingBreath,
       hideThreat: sim.hideThreat,
+      heartMinigame: sim.heartMinigame,
+      heartPhase: sim.heartPhase,
+      heartWindow: sim.heartWindow,
+      heartStress: sim.heartStress,
+      heartFeedback: sim.heartFeedback,
       crosshair: this.rig.mode === "fp" && !sim.hidden,
       sonar: p.sonarOpen,
       exitOpen: sim.exitUnlocked,
@@ -1366,10 +1534,15 @@ export class Game {
       holding: sim.holdingBreath,
       dead: this.phase === "dying",
       dread: (this.settings.scares === "full" ? 1 : this.settings.scares === "reduced" ? 0.6 : 0.35) * (this.run ? DIFFICULTIES[this.run.diff].ambientScares : 1),
-      ghosts: sim.ghosts.map((g) => ({
-        kind: g.kind, x: g.x, y: 1.4, z: g.z, mode: g.mode, frozen: g.frozen, startled: g.startled, silent: g.silent,
-        dist: Math.hypot(g.x - p.x, g.z - p.z),
-      })),
+      ghosts: sim.ghosts.map((g) => {
+        const dist = Math.hypot(g.x - p.x, g.z - p.z);
+        const occluded = dist > 1.2 && !sim.maze.rayClear(p.x, p.z, g.x, g.z, 0.35);
+        const searching = (g.lastSeen !== null && !g.sawPlayer) || g.checkSpot >= 0;
+        return {
+          kind: g.kind, x: g.x, y: 1.4, z: g.z, mode: g.mode, frozen: g.frozen, startled: g.startled, silent: g.silent,
+          dist, occluded, speed: g.speedCells, searching,
+        };
+      }),
     };
   }
 
@@ -1410,6 +1583,13 @@ export class Game {
   }
 
   private setPhase(p: Phase): void {
+    if (typeof document !== "undefined" && document.body) {
+      document.body.dataset.phase = p;
+      document.body.dataset.state =
+        p === "playing" || p === "dying" ? "playing" :
+        p === "paused" ? "paused" :
+        p === "gameover" || p === "levelclear" || p === "victory" ? "gameover" : "title";
+    }
     if (this.phase === p) return;
     this.phase = p;
     this.audio.setMenuBed?.(p === "menu" || p === "briefing" || p === "loading");

@@ -25,6 +25,14 @@ export type SimEvent =
   | { type: "bite"; stunned: number; eaten: number }
   | { type: "battery"; x: number; z: number }
   | { type: "switch"; zone: number; alerted: number }
-  | { type: "hide"; inside: boolean; seen: boolean }
+  | { type: "hide"; inside: boolean; seen: boolean; kind?: "locker" | "vent" | "table" }
   | { type: "gasp" }
-  | { type: "hideCheck"; ghost: GhostKind };
+  | { type: "heartBeat"; result: "hit" | "miss" }
+  | { type: "hideCheck"; ghost: GhostKind }
+  | { type: "steamWarning"; index: number; x: number; z: number }
+  | { type: "steamErupt"; index: number; x: number; z: number }
+  | { type: "steamHurt"; x: number; z: number }
+  | { type: "zoneFlicker"; zone: number; x: number; z: number }
+  | { type: "zoneBlackout"; zone: number; x: number; z: number }
+  | { type: "mazeShift"; closed: [number, number]; opened: [number, number]; x: number; z: number };
+

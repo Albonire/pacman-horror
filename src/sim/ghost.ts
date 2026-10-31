@@ -220,6 +220,8 @@ export interface AIContext {
   hearCells: number;
   /** 0 sin tacticas, 1 pinza al ver al jugador, 2 ademas prediccion de huida (por defecto 2). */
   tactics?: 0 | 1 | 2;
+  /** Fugas de vapor activas (bloquean la linea de vision de los fantasmas). */
+  activeSteam?: readonly { x: number; z: number }[];
 }
 
 

@@ -1,7 +1,7 @@
 import { useId, type ReactNode } from "react";
 
 export function Btn({
-  children, onClick, tone = "amber", size = "md", autoFocus, disabled, className = "", menu,
+  children, onClick, tone = "amber", size = "md", autoFocus, disabled, className = "", menu, "data-start": dataStart,
 }: {
   children: ReactNode;
   onClick: () => void;
@@ -11,6 +11,7 @@ export function Btn({
   disabled?: boolean;
   className?: string;
   menu?: boolean;
+  "data-start"?: string;
 }) {
   const t = tone === "red" ? "btn-red" : tone === "green" ? "btn-green" : "";
   return (
@@ -20,6 +21,7 @@ export function Btn({
       onClick={onClick}
       autoFocus={autoFocus}
       disabled={disabled}
+      data-start={dataStart}
     >
       {children}
     </button>

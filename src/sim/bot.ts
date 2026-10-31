@@ -51,8 +51,9 @@ export class EvasiveBot {
     this.goalLock -= dt;
     const cellChanged = cx !== this.lastCell[0] || cy !== this.lastCell[1];
     if (cellChanged) this.lastCell = [cx, cy];
-    if (cellChanged || this.age > 0.12 || this.next === null) {
+    if (cellChanged || this.age > 0.12 || this.next === null || !m.isWalkable(this.next[0], this.next[1])) {
       this.age = 0;
+      if (this.next && !m.isWalkable(this.next[0], this.next[1])) this.goalLock = 0;
       this.next = this.plan(cx, cy);
     }
 

@@ -39,7 +39,7 @@ export function WarningScreen({ onContinue, onReduced }: { onContinue: () => voi
         </p>
         <p className="p" style={{ marginTop: 10 }}>Se recomienda jugar con auriculares y un volumen moderado, en una habitación con algo de luz.</p>
         <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 26, flexWrap: "wrap" }}>
-          <Btn autoFocus onClick={onContinue}>ENTIENDO, CONTINUAR</Btn>
+          <Btn autoFocus data-start="true" onClick={onContinue}>ENTIENDO, CONTINUAR</Btn>
           <Btn tone="green" onClick={onReduced}>SUSTOS REDUCIDOS</Btn>
         </div>
       </div>
@@ -66,7 +66,7 @@ export function MainMenu({
           pero ellos ya saben dónde estás, y esta vez ellos son los que dan miedo.
         </p>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%" }}>
-          <Btn menu autoFocus size="lg" onClick={onPlay}>JUGAR</Btn>
+          <Btn menu autoFocus size="lg" data-start="true" onClick={onPlay}>JUGAR</Btn>
           <Btn menu onClick={onLevels}>NIVELES</Btn>
           <Btn menu onClick={onControls}>CONTROLES</Btn>
           <Btn menu onClick={onSettings}>AJUSTES</Btn>
@@ -107,7 +107,7 @@ export function DifficultyScreen({
         <DifficultyCards selected={selected} onSelect={onSelect} />
         <div style={{ display: "flex", gap: 12, marginTop: 24, justifyContent: "space-between", flexWrap: "wrap" }}>
           <Btn tone="red" onClick={onBack}>VOLVER</Btn>
-          <Btn autoFocus size="lg" onClick={onStart}>DESCENDER</Btn>
+          <Btn autoFocus size="lg" data-start="true" onClick={onStart}>DESCENDER</Btn>
         </div>
       </div>
     </Screen>
@@ -152,11 +152,11 @@ export function ControlsList() {
     [<><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></>, "Moverse (relativo a hacia dónde miras)"],
     [<>Ratón</>, "Mirar. Haz clic en el juego para capturar el ratón"],
     [<>Flechas</>, "Adelante / atrás / lateral (en modo teclado, izquierda y derecha giran)"],
-    [<><kbd>E</kbd> / <kbd>Intro</kbd></>, "Interactuar: esconderte en armarios, encender luces, salir del escondite"],
+    [<><kbd>E</kbd> / <kbd>Intro</kbd></>, "Interactuar: esconderte (armarios, conductos, mesas) o encender luces"],
     [<><kbd>Q</kbd></>, "Girar la vista con el teclado (también sin capturar el ratón)"],
     [<><kbd>Z</kbd></>, "Mirar por encima del hombro (sin desviar el paso)"],
     [<><kbd>Shift</kbd></>, "Correr (gasta aliento; los fantasmas te oyen)"],
-    [<><kbd>Espacio</kbd> / clic dcho.</>, "Ecolocalización: mapa y entidades (mantener, frena)"],
+    [<><kbd>Espacio</kbd> / clic dcho.</>, "Ecolocalización (fuera) · Pulsar al ritmo del corazón (escondido)"],
     [<><kbd>F</kbd></>, "Resplandor: linterna (gasta energía; frena al Estático)"],
     [<><kbd>C</kbd></>, "Cambiar cámara: 1ª / 3ª persona"],
     [<><kbd>X</kbd> / clic izq.</>, "Morder: aturde al fantasma de enfrente (gasta aliento, se recarga)"],
@@ -253,7 +253,7 @@ export function BriefingScreen({
           Las figuras inmóviles son fantasmas dormidos: despiertan con el tiempo o si te acercas. El Estático solo se queda quieto mientras lo miras con la linterna. Con X muerdes y aturdes al que tienes delante.
         </p>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <Btn autoFocus size="lg" onClick={onEnter}>ENTRAR</Btn>
+          <Btn autoFocus size="lg" data-start="true" onClick={onEnter}>ENTRAR</Btn>
           <Btn tone="red" onClick={onBack}>MENÚ</Btn>
         </div>
       </div>

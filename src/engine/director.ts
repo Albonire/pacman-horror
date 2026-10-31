@@ -331,11 +331,11 @@ export class ScareDirector {
         break;
       }
       case "face": {
-        // 0,7 s de silencio y entonces el destello (con golpe y grito sincronizados)
+        // 0,7 s de silencio y entonces el destello (con golpe y grito momentaneo sincronizados)
         if (!a.data.fired && a.t > 0.7) {
           a.data.fired = 1;
           this.h.scare.flashFace(a.ghost!, 0.3);
-          audio.playScareHit(0.9);
+          audio.playScareHit(1.25);
         }
         if (a.t > 1.3) this.finish();
         break;
@@ -466,13 +466,13 @@ export class ScareDirector {
         break;
       }
       case "glimpse": {
-        // 3 destellos tenues de una cara, cada uno de unos 90 ms, con el audio justo antes
-        if (a.t > 0.5 + a.data.n * 0.7 && a.data.n < 3) {
+        // Destello fugaz de la cara de un fantasma de la nada con un golpe sonoro fuerte y momentaneo
+        if (a.t > 0.45 + a.data.n * 0.72 && a.data.n < 2) {
           a.data.n += 1;
-          this.h.scare.flashFace(a.ghost!, 0.09, 0.38);
-          audio.playScareHit(0.45);
+          this.h.scare.flashFace(a.ghost!, 0.16, 0.22);
+          audio.playScareHit(0.95);
         }
-        if (a.t > 2.6) this.finish();
+        if (a.t > 2.1) this.finish();
         break;
       }
       case "bang":

@@ -30,9 +30,16 @@ export class Maze {
     this.W = layout.W;
     this.H = layout.H;
     this.tunnelRow = layout.tunnelRow;
-    this.rows = layout.grid;
+    this.rows = [...layout.grid];
     this.exit = layout.exit;
     this.exitDir = layout.exitDir;
+  }
+
+  /** Modifica el caracter de una celda en caliente (p. ej. geometria no euclidiana). */
+  setCell(x: number, y: number, ch: string): void {
+    if (!this.inBounds(x, y) || !ch.length) return;
+    const row = this.rows[y];
+    this.rows[y] = row.slice(0, x) + ch[0] + row.slice(x + 1);
   }
 
   get worldWidth(): number { return this.W * CELL; }

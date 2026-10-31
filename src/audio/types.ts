@@ -13,6 +13,12 @@ export interface AudioGhost {
   frozen: boolean;
   startled: boolean;
   dist: number; // distancia al jugador en el mundo
+  /** True si hay al menos un muro entre el fantasma y el oyente (amortigua agudos y refuerza el eco). */
+  occluded?: boolean;
+  /** Velocidad actual en celdas/s (0 si esta detenido frente a un escondite). */
+  speed?: number;
+  /** True si el fantasma busca un rastro reciente o inspecciona un escondite cercano. */
+  searching?: boolean;
 }
 
 export interface AudioFrame {
@@ -94,8 +100,8 @@ export interface GameAudio {
   /** Pulso de la salida abierta, desde la direccion de la salida. */
   playBeacon(x: number, y: number, z: number): void;
   playBlackout(on: boolean): void;
-  /** Efecto de screamer de flash (cara a pantalla completa). */
-  playScreamerFlash(): void;
+  /** Efecto de screamer de flash (cara a pantalla completa): impacto fuerte y momentaneo. */
+  playScreamerFlash(strength?: number): void;
   playHeartbeat(strength: number): void;
   playPickup(): void;
   playSwitch(): void;
@@ -106,6 +112,12 @@ export interface GameAudio {
   playScareHit(strength: number): void;
   /** Fuerza un sonido de pavor concreto (depuracion y pruebas). */
   playDread(kind: string): void;
+  /** Eventos ambientales dinamicos (vapor, apagones de zona y pasillos cambiantes). */
+  playSteamWarning(x: number, y: number, z: number): void;
+  playSteamBurst(x: number, y: number, z: number): void;
+  playSteamCough(): void;
+  playBreakerTrip(x: number, y: number, z: number): void;
+  playMazeShift(x: number, y: number, z: number): void;
   dispose(): void;
 }
 
@@ -146,7 +158,7 @@ export class NullAudio implements GameAudio {
   playFootsteps(): void {}
   playBeacon(): void {}
   playBlackout(): void {}
-  playScreamerFlash(): void {}
+  playScreamerFlash(_strength?: number): void {}
   playHeartbeat(): void {}
   playPickup(): void {}
   playSwitch(): void {}
@@ -154,5 +166,10 @@ export class NullAudio implements GameAudio {
   playGasp(): void {}
   playScareHit(): void {}
   playDread(): void {}
+  playSteamWarning(): void {}
+  playSteamBurst(): void {}
+  playSteamCough(): void {}
+  playBreakerTrip(): void {}
+  playMazeShift(): void {}
   dispose(): void {}
 }

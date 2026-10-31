@@ -293,6 +293,16 @@ kbd {
 .hud-hide .lab-hold { display: none; }
 .hud-hide[data-holding="1"] .lab-idle { display: none; }
 .hud-hide[data-holding="1"] .lab-hold { display: inline; color: rgba(190, 220, 255, 0.8); }
+.hud-heart { position: absolute; left: 50%; bottom: 8.5%; transform: translateX(-50%); width: 320px; opacity: 0; transition: opacity 0.22s; z-index: 2; }
+.hud-heart-head { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--crt); font-size: 11px; letter-spacing: 0.16em; color: var(--bone-dim); margin-bottom: 5px; text-shadow: 0 0 8px #000, 0 1px 3px #000; }
+.hud-heart[data-feedback="hit"] .hud-heart-head { color: var(--ok); }
+.hud-heart[data-feedback="miss"] .hud-heart-head { color: #ff8672; }
+.hud-heart-track { position: relative; height: 14px; background: rgba(8, 4, 4, 0.88); box-shadow: 0 0 18px 4px rgba(0, 0, 0, 0.9), inset 0 0 8px rgba(0, 0, 0, 0.95); border: 1px solid rgba(236, 223, 198, 0.22); border-radius: 3px; overflow: hidden; }
+.hud-heart-stress { position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: linear-gradient(90deg, rgba(120, 14, 10, 0.45), rgba(210, 32, 20, 0.72)); transition: width 0.08s linear; }
+.hud-heart-zone { position: absolute; left: 50%; top: 1px; bottom: 1px; width: 36%; transform: translateX(-50%); background: rgba(154, 208, 138, 0.22); border-left: 2px solid rgba(236, 223, 198, 0.75); border-right: 2px solid rgba(236, 223, 198, 0.75); box-shadow: 0 0 10px rgba(154, 208, 138, 0.35); }
+.hud-heart[data-feedback="hit"] .hud-heart-zone { background: rgba(154, 208, 138, 0.5); box-shadow: 0 0 14px rgba(154, 208, 138, 0.85); }
+.hud-heart[data-feedback="miss"] .hud-heart-zone { background: rgba(255, 74, 54, 0.45); border-color: #ff6a4c; }
+.hud-heart-cursor { position: absolute; top: -1px; bottom: -1px; left: 0%; width: 4px; transform: translateX(-50%); background: #fff6dc; box-shadow: 0 0 10px 2px #ff4a36; border-radius: 2px; }
 .hud-radar canvas { width: 100%; height: 100%; image-rendering: pixelated; }
 .hud-popup { position: absolute; transform: translate(-50%, -50%); font-family: var(--crt); font-weight: 400; letter-spacing: 0.1em; animation: popUp 1.2s ease-out forwards; text-shadow: 0 0 10px #000, 0 2px 4px #000; }
 .hud-popup-points { color: #cfe0ff; font-size: 28px; }

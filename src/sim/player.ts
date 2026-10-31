@@ -51,6 +51,8 @@ export class PlayerSim {
   /** Direccion cardinal de la mirada (no la del movimiento). */
   viewHeading: Cell = [0, -1];
   invuln = 0;
+  /** Ralentizado por atravesar una fuga de vapor activa. */
+  steamSlow = false;
 
   private stepAcc = 0;
   private moveHeading: Cell = [0, -1];
@@ -59,6 +61,7 @@ export class PlayerSim {
     this.x = x; this.z = z; this.yaw = yaw; this.viewYaw = yaw;
     this.vx = 0; this.vz = 0; this.speed = 0;
     this.moving = false; this.running = false; this.exhausted = false; this.sonarOpen = false;
+    this.steamSlow = false;
     this.stamina = K.STAMINA_MAX;
     this.noise = 0;
     this.stepAcc = 0;
@@ -104,6 +107,7 @@ export class PlayerSim {
     let max = this.running ? K.PLAYER_RUN : K.PLAYER_WALK;
     if (this.exhausted) max = K.PLAYER_WALK * 0.78;
     if (this.sonarOpen) max *= K.SONAR_SLOW;
+    if (this.steamSlow) max *= 0.76;
     // atras y de lado son algo mas lentos
     if (input.forward < 0) max *= 0.72;
     else if (Math.abs(input.strafe) > 0.5 && input.forward <= 0.2) max *= 0.88;

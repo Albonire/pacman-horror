@@ -147,4 +147,92 @@ describe("escondites: sospecha, aliento y revisiones", () => {
     }
     expect(checked).toBe(true);
   });
+
+  it("genera variedad de escondites (locker, vent, table) con alturas de camara y angulos propios", () => {
+    const sim = mk();
+    const kinds = new Set(sim.hideSpots.map((h) => h.kind));
+    expect(kinds.has("locker")).toBe(true);
+    expect(kinds.has("vent")).toBe(true);
+    expect(kinds.has("table")).toBe(true);
+    expect(sim.hideEyeHeight("vent")).toBeLessThan(sim.hideEyeHeight("table"));
+    expect(sim.hideEyeHeight("table")).toBeLessThan(sim.hideEyeHeight("locker"));
+    expect(sim.hideYawLimit("table")).toBeGreaterThan(sim.hideYawLimit("vent"));
+    expect(sim.hideYawLimit("vent")).toBeGreaterThan(sim.hideYawLimit("locker"));
+  });
+
+  it("un fantasma en patrulla que NO te vio ni oyo entrar pasa de largo sin detenerse ni atraparte", () => {
+    const sim = mk();
+    quiet(sim);
+    const h = sim.hideSpots[0];
+    sim.player.x = h.x; sim.player.z = h.z; sim.player.invuln = 0;
+    sim.update(DT, { ...NO_INPUT, interact: true });
+    expect(sim.hidden).toBe(h);
+    expect(sim.hiddenSeen).toBe(false);
+    expect(sim.hiddenSuspected).toBe(false);
+
+    const g = sim.ghosts[0];
+    g.mode = "scatter";
+    g.wakeTimer = 0;
+    g.cx = h.cell[0];
+    g.cy = h.cell[1];
+    g.p = 0;
+    g.offX = 0;
+    g.offZ = 0;
+    g.refreshWorld(sim.maze);
+
+    // Al avanzar un paso, como no vio ni oyo al jugador entrar, no se detiene (speedCells > 0) y sigue patrullando
+    sim.update(DT, NO_INPUT);
+    expect(g.speedCells).toBeGreaterThan(0);
+    for (let i = 0; i < 60 * 5; i++) {
+      sim.update(DT, NO_INPUT);
+    }
+    expect(sim.state).toBe("playing");
+  });
+
+  it("pulsar Espacio al ritmo en la ventana central del latido calma el pulso sin agotar el aliento ni jadear", () => {
+    const sim = mk();
+    const { h, g } = hideWithGhostAt(sim, 1.5);
+    const dist = Math.hypot(g.x - (h.x + h.wall[0] * 0.56), g.z - (h.z + h.wall[1] * 0.56));
+    sim.drainEvents();
+    let hits = 0;
+    let gasps = 0;
+    for (let i = 0; i < 60 * 6 && sim.state === "playing"; i++) {
+      placeGhost(sim, g, h, dist);
+      g.mode = "chase";
+      g.stun = 0;
+      const inWindow = Math.abs(sim.heartPhase - 0.5) < sim.heartWindow * 0.5;
+      // Toque corto de Espacio solo cuando el cursor entra en el centro y aun no tenemos calma activa
+      const tap = sim.heartMinigame && inWindow && !sim.holdingBreath;
+      sim.update(DT, { ...NO_INPUT, sonar: tap });
+      for (const ev of sim.drainEvents()) {
+        if (ev.type === "heartBeat" && ev.result === "hit") hits++;
+        if (ev.type === "gasp") gasps++;
+      }
+    }
+    expect(hits).toBeGreaterThanOrEqual(3);
+    expect(gasps).toBe(0);
+    expect(sim.state).toBe("playing");
+    expect(sim.player.stamina).toBeGreaterThan(85);
+  });
+
+  it("una nube de vapor activa entre el fantasma y el escondite bloquea su vision al entrar", () => {
+    const sim = mk();
+    quiet(sim);
+    const h = sim.hideSpots[0];
+    sim.player.x = h.x; sim.player.z = h.z; sim.player.invuln = 0;
+    const g = sim.ghosts[0];
+    g.mode = "chase";
+    g.wakeTimer = 0;
+    placeGhost(sim, g, h, 2.2);
+
+    // Colocamos una fuga de vapor en erupcion justo entre el jugador y el fantasma
+    sim.steamVents[0].x = (sim.player.x + g.x) * 0.5;
+    sim.steamVents[0].z = (sim.player.z + g.z) * 0.5;
+    sim.steamVents[0].state = "erupting";
+    sim.steamVents[0].timer = 5;
+
+    sim.update(DT, { ...NO_INPUT, interact: true });
+    expect(sim.hidden).toBe(h);
+    expect(sim.hiddenSeen).toBe(false);
+  });
 });

@@ -21,8 +21,11 @@ export class CameraRig {
   trauma = 0;
   roll = 0;
   fovPunch = 0;
-  /** 0..1: cuanto de metido esta en un armario (suaviza el estrechamiento del campo de vision). */
+  /** 0..1: cuanto de metido esta en un escondite (suaviza el estrechamiento del campo de vision). */
   private hideK = 0;
+  /** Altura objetivo de la camara (varia al meterse en un conducto bajo o bajo una mesa). */
+  targetEyeH = K.EYE_H;
+  private eyeH = K.EYE_H;
   private bobPhase = 0;
   private bobAmp = 0;
   private breath = 0;
@@ -58,6 +61,7 @@ export class CameraRig {
     this.fovPunch *= Math.exp(-dt * 6);
     const cam = this.camera;
     this.hideK += ((this.forceFp ? 1 : 0) - this.hideK) * Math.min(1, dt * 4);
+    this.eyeH += (this.targetEyeH - this.eyeH) * Math.min(1, dt * 8);
 
     // balanceo: sigue la distancia recorrida
     const target = this.headBob ? Math.min(1, p.speed / K.PLAYER_RUN) : 0;
@@ -86,12 +90,12 @@ export class CameraRig {
     }
 
     const yaw = p.viewYaw + sx;
-    // dentro del armario se respira despacio y la vista se mece un poco
+    // dentro del escondite se respira despacio y la vista se mece un poco
     const pitch = this.pitch + sy + Math.sin(this.time * 0.9) * 0.006 * this.hideK;
     const rx = Math.cos(p.viewYaw), rz = -Math.sin(p.viewYaw);
 
     if (this.mode === "fp" || this.forceFp) {
-      cam.position.set(p.x + rx * bobX, K.EYE_H + bobY, p.z + rz * bobX);
+      cam.position.set(p.x + rx * bobX, this.eyeH + bobY, p.z + rz * bobX);
       cam.rotation.set(pitch, yaw, rollWalk + this.roll + sr);
     } else {
       // tercera persona: detras y arriba, acortada si hay un muro

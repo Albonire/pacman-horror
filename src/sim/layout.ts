@@ -15,6 +15,8 @@ export interface LayoutSpec {
   braid: number; // prob. de eliminar cada callejon sin salida
 }
 
+export type HideSpotKind = "locker" | "vent" | "table";
+
 export interface LevelLayout {
   grid: string[];
   W: number;
@@ -38,7 +40,7 @@ export interface LevelLayout {
   /** Cajas de fusibles: encienden la zona oscura asociada. */
   switches: { cell: Cell; zone: number; wall: Cell }[];
   /** Escondites junto a una pared (`wall` apunta de la celda hacia el hueco). */
-  hideSpots: { cell: Cell; wall: Cell }[];
+  hideSpots: { cell: Cell; wall: Cell; kind?: HideSpotKind }[];
 }
 
 export interface DarkZone { cell: Cell; r: number }
@@ -255,18 +257,20 @@ function build(spec: LayoutSpec, seed: number): LevelLayout | null {
     if (eu(c, player) < 5 || batteries.some((b) => eu(b, c) < 5)) continue;
     batteries.push(c); take(c);
   }
-  const hideSpots: { cell: Cell; wall: Cell }[] = [];
+  const hideSpots: { cell: Cell; wall: Cell; kind: HideSpotKind }[] = [];
+  const hideKinds: HideSpotKind[] = ["locker", "vent", "table"];
   const hideCount = Math.max(3, Math.round(open2.length / 38));
   for (const c of shuffle(rng, freeCells())) {
     if (hideSpots.length >= hideCount) break;
     if (eu(c, player) < 3.5 || hideSpots.some((h) => eu(h.cell, c) < 5)) continue;
     const wN = !g[c[1] - 1]?.[c[0]], wS = !g[c[1] + 1]?.[c[0]], wW = !g[c[1]]?.[c[0] - 1], wE = !g[c[1]]?.[c[0] + 1];
-    // pasillo recto de dos paredes opuestas: el armario va en una de ellas
+    // pasillo recto de dos paredes opuestas: el escondite va en una de ellas
     let wall: Cell | null = null;
     if (wN && wS && !wW && !wE) wall = rng() < 0.5 ? [0, -1] : [0, 1];
     else if (wW && wE && !wN && !wS) wall = rng() < 0.5 ? [-1, 0] : [1, 0];
     if (!wall) continue;
-    hideSpots.push({ cell: c, wall }); take(c);
+    const kind = hideKinds[hideSpots.length % hideKinds.length];
+    hideSpots.push({ cell: c, wall, kind }); take(c);
   }
 
   const exitNeighbors = DIRS.filter(([dx, dy]) => g[exit[1] + dy]?.[exit[0] + dx]);

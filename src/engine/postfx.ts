@@ -20,11 +20,12 @@ export interface FxState {
   contrast: number;
   grain: number;
   blackout: number; // 0..1 fundido a negro
+  blur: number; // 0..1 desenfoque radial y vision de tunel por agotamiento
 }
 
 export const defaultFx = (): FxState => ({
   time: 0, glitch: 0, aberration: 0, staticNoise: 0, flash: 0, flashColor: [1, 1, 1], pulse: 0, vignette: 0,
-  desaturate: 0, brightness: 1, tint: [1, 1, 1], saturation: 1, contrast: 1, grain: 0.06, blackout: 0,
+  desaturate: 0, brightness: 1, tint: [1, 1, 1], saturation: 1, contrast: 1, grain: 0.06, blackout: 0, blur: 0,
 });
 
 const FinalShader = {
@@ -45,6 +46,7 @@ const FinalShader = {
     uContrast: { value: 1 },
     uGrain: { value: 0.06 },
     uBlackout: { value: 0 },
+    uBlur: { value: 0 },
     uRes: { value: new THREE.Vector2(1280, 720) },
   },
   vertexShader: /* glsl */ `
@@ -53,7 +55,7 @@ const FinalShader = {
   `,
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse;
-    uniform float uTime, uGlitch, uAberration, uStatic, uFlash, uPulse, uVignette, uDesat, uBrightness, uSat, uContrast, uGrain, uBlackout;
+    uniform float uTime, uGlitch, uAberration, uStatic, uFlash, uPulse, uVignette, uDesat, uBrightness, uSat, uContrast, uGrain, uBlackout, uBlur;
     uniform vec3 uFlashColor, uTint;
     uniform vec2 uRes;
     varying vec2 vUv;
@@ -73,11 +75,22 @@ const FinalShader = {
       // nunca se muestrea fuera de la textura: evita el estirado del borde derecho
       uv = clamp(uv, vec2(0.0015), vec2(0.9985));
       vec2 dir = normalize(cc + vec2(1e-5));
-      float ab = (0.00018 + uAberration * 0.006 + uGlitch * 0.0035) * (0.3 + r2 * 4.0) * (1.0 - edge);
+      float ab = (0.00018 + uAberration * 0.006 + uGlitch * 0.0035 + uBlur * 0.0032) * (0.3 + r2 * 4.0) * (1.0 - edge);
       vec3 col;
       col.r = texture2D(tDiffuse, clamp(uv + dir * ab, vec2(0.0015), vec2(0.9985))).r;
       col.g = texture2D(tDiffuse, uv).g;
       col.b = texture2D(tDiffuse, clamp(uv - dir * ab, vec2(0.0015), vec2(0.9985))).b;
+      // desenfoque radial de fatiga fisica (centro nitido, periferia borrosa hacia adentro)
+      if (uBlur > 0.001) {
+        float radialAmt = smoothstep(0.07, 0.52, length(cc)) * uBlur;
+        vec2 stepUv = cc * radialAmt * 0.042;
+        vec3 bCol = col * 0.30;
+        bCol += texture2D(tDiffuse, clamp(uv - stepUv * 0.5, vec2(0.0015), vec2(0.9985))).rgb * 0.24;
+        bCol += texture2D(tDiffuse, clamp(uv - stepUv * 1.0, vec2(0.0015), vec2(0.9985))).rgb * 0.20;
+        bCol += texture2D(tDiffuse, clamp(uv - stepUv * 1.6, vec2(0.0015), vec2(0.9985))).rgb * 0.15;
+        bCol += texture2D(tDiffuse, clamp(uv + stepUv * 0.45, vec2(0.0015), vec2(0.9985))).rgb * 0.11;
+        col = mix(col, bCol, clamp(radialAmt * 1.15, 0.0, 1.0));
+      }
       // gradacion
       float lum = dot(col, vec3(0.299, 0.587, 0.114));
       col = mix(vec3(lum), col, uSat * (1.0 - uDesat));
@@ -96,10 +109,10 @@ const FinalShader = {
         float snow = rand(floor(uv * uRes * 0.5) + floor(uTime * 30.0));
         col = mix(col, vec3(snow), uStatic * 0.55);
       }
-      // vineta con pulso cardiaco
-      float vig = 1.0 - smoothstep(0.2, 0.95, length(cc) * (1.0 + uPulse * 0.25 + uVignette * 0.5));
-      col *= 0.38 + 0.62 * vig;
-      col = mix(col, col * vec3(1.0, 0.35, 0.3), uPulse * 0.35 * (1.0 - vig));
+      // vineta con pulso cardiaco y vision de tunel por fatiga
+      float vig = 1.0 - smoothstep(0.18, 0.92, length(cc) * (1.0 + uPulse * 0.28 + uVignette * 0.52 + uBlur * 0.48));
+      col *= 0.34 + 0.66 * vig;
+      col = mix(col, col * vec3(1.0, 0.32, 0.28), (uPulse * 0.38 + uBlur * 0.22) * (1.0 - vig));
       col = mix(col, uFlashColor, uFlash);
       col *= 1.0 - uBlackout;
       gl_FragColor = vec4(col, 1.0);
@@ -153,5 +166,6 @@ export function applyFx(pass: ShaderPass, fx: FxState, width: number, height: nu
   u.uContrast.value = fx.contrast;
   u.uGrain.value = fx.grain;
   u.uBlackout.value = fx.blackout;
+  u.uBlur.value = fx.blur;
   (u.uRes.value as THREE.Vector2).set(width, height);
 }

@@ -45,7 +45,23 @@ export const HudView = forwardRef<HTMLDivElement, { radarRef: React.RefObject<HT
       <div className="hud-hint" data-hud="hint" />
       <div className="hud-exit" data-hud="exitArrow"><i /></div>
       <div className="hud-cross" data-hud="crosshair" />
-      <div className="hud-hide" data-hud="hide"><span className="hud-hide-label"><span className="lab-idle">E: SALIR · ESPACIO: CONTENER EL ALIENTO</span><span className="lab-hold">CONTENIENDO EL ALIENTO</span></span></div>
+      <div className="hud-hide" data-hud="hide">
+        <div className="hud-heart" data-hud="heartGame">
+          <div className="hud-heart-head">
+            <span data-hud="hideTitle">ESCONDITE</span>
+            <span data-hud="heartLabel">PULSA [ESPACIO] EN EL CENTRO</span>
+          </div>
+          <div className="hud-heart-track">
+            <div className="hud-heart-stress" data-hud="heartStress" />
+            <div className="hud-heart-zone" data-hud="heartZone" />
+            <div className="hud-heart-cursor" data-hud="heartCursor" />
+          </div>
+        </div>
+        <span className="hud-hide-label">
+          <span className="lab-idle">E: SALIR · ESPACIO AL RITMO DEL CORAZÓN</span>
+          <span className="lab-hold">PULSO CONTROLADO · EN CALMA</span>
+        </span>
+      </div>
       <div className="hud-radar" data-hud="radar"><canvas ref={radarRef} /></div>
       <div data-hud="popups" style={{ position: "absolute", inset: 0 }} />
       <div className="hud-vignette" data-hud="vignette" />

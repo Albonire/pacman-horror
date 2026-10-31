@@ -229,25 +229,25 @@ export function gasp(S: Synth): void {
   baked.gasp(S);
 }
 
-/** Golpe de susto sincronizado con cada destello de la cara: acorde disonante, aire y sub-grave. */
+/** Golpe de susto sincronizado con cada destello de la cara: acorde disonante, latigazo de aire y sub-grave. */
 export function scareHit(S: Synth, strength: number): void {
   const s = Math.max(0.4, Math.min(1.5, strength));
   [233.1, 246.9, 277.2, 349.2, 370, 466.2].forEach((f, i) =>
     S.tone({
       type: "sawtooth",
-      f0: f * 2.2,
-      f1: f * 1.8,
-      dur: 0.35,
-      vol: 0.12 * s,
-      lp: 3800,
+      f0: f * 2.3,
+      f1: f * 1.65,
+      dur: 0.3,
+      vol: 0.16 * s,
+      lp: 4200,
       a: 0.001,
-      detune: (i - 2.5) * 16,
-      send: 0.4,
+      detune: (i - 2.5) * 18,
+      send: 0.35,
     }),
   );
-  S.noise({ hp: 800, dur: 0.28, vol: 0.8 * s, a: 0.001 });
-  S.tone({ f0: 88, f1: 24, dur: 0.5, vol: 1.0 * s, a: 0.001 });
-  S.tone({ type: "square", f0: 3600, f1: 1400, dur: 0.15, vol: 0.1 * s, a: 0.001 });
+  S.noise({ hp: 750, dur: 0.25, vol: 0.92 * s, a: 0.001 });
+  S.tone({ f0: 108, f1: 24, dur: 0.42, vol: 1.0 * s, a: 0.001 });
+  S.tone({ type: "square", f0: 3800, f1: 1350, dur: 0.14, vol: 0.14 * s, a: 0.001 });
 }
 
 export function gameOver(S: Synth): void {
@@ -316,12 +316,100 @@ export function blackout(S: Synth, on: boolean): void {
   }
 }
 
-export function screamerFlash(S: Synth): void {
-  S.noise({ hp: 1100, dur: 0.42, vol: 0.55, a: 0.002 });
-  S.formantVoice({ f0: 1900, f1: 3300, dur: 0.38, vol: 0.45, a: 0.005, formants: [[1500, 8, 1], [3000, 10, 0.8]], dist: true, send: 0.2 });
-  S.formantVoice({ f0: 640, f1: 1500, dur: 0.4, vol: 0.4, a: 0.005, formants: [[900, 7, 1], [1900, 9, 0.9]], dist: true, vibRate: 16, vibDepth: 60, send: 0.3 });
-  [233.1, 246.9, 311.1].forEach((f, i) => S.tone({ type: "sawtooth", f0: f * 2, dur: 0.4, vol: 0.06, lp: 2800, a: 0.003, detune: (i - 1) * 12 }));
-  S.tone({ f0: 66, f1: 24, dur: 0.6, vol: 0.9, a: 0.002 });
+/**
+ * Estallido sonoro de screamer fugaz (fuerte pero momentaneo, ~0,32 s):
+ * 1) Ducking instantaneo del ambiente para maximo contraste dinamico.
+ * 2) Golpe seco de pecho (sub-grave 128->22 Hz + transitorio explosivo de ruido y metal).
+ * 3) Rafaga de chillido desgarrado en el bus de voz (corte de muestra de grito + formantes distorsionados)
+ *    que golpea al instante y se corta en seco en cuanto desaparece la cara.
+ */
+export function screamerFlash(S: Synth, strength = 1): void {
+  const s = Math.max(0.45, Math.min(1.35, strength));
+  const t0 = S.now;
+
+  // Silencia de golpe el fondo durante 0,45 s para que el impacto sobresalte de verdad y vuelva enseguida
+  S.duck(0.04, 0.45, 0.35);
+
+  // 1) Impacto fisico en el pecho (ataque de 1 ms, caida sub-grave y latigazo de aire/metal)
+  S.tone({ f0: 135, f1: 18, t: t0, dur: 0.36, vol: 1.0 * s, a: 0.001, dest: S.voice });
+  S.tone({ type: "triangle", f0: 280, f1: 38, t: t0, dur: 0.26, vol: 0.95 * s, a: 0.001, dest: S.voice });
+  S.tone({ f0: 62, f1: 28, t: t0, dur: 0.42, vol: 0.88 * s, a: 0.001, lp: 160, dest: S.voice });
+  S.noise({ kind: "white", hp: 680, t: t0, dur: 0.26, vol: 1.0 * s, a: 0.001, dest: S.voice, send: 0.22 });
+  S.noise({ kind: "pink", bp: 2950, bp1: 1350, q: 2.8, t: t0, dur: 0.28, vol: 0.88 * s, a: 0.001, dest: S.voice, send: 0.25 });
+
+  // 1b) Transitorio de alta frecuencia estridente (golpe de cuchilla / chirrido punzante que causa sobresalto reflejo inmediato)
+  S.tone({ type: "sawtooth", f0: 5200, f1: 2600, t: t0, dur: 0.12, vol: 0.32 * s, a: 0.0005, hp: 2200, dest: S.voice });
+  S.tone({ type: "square", f0: 3850, f1: 1950, t: t0, dur: 0.15, vol: 0.24 * s, a: 0.0005, bp: 3200, q: 4.5, dest: S.voice });
+  S.noise({ hp: 4200, t: t0, dur: 0.09, vol: 0.45 * s, a: 0.0005, dest: S.voice });
+
+  // 2) Rafaga corta de la muestra de grito (si ya esta decodificada) cortada en seco a ~0,30 s
+  const buf = S.getSample("scream");
+  if (buf) {
+    const src = S.ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = 1.08 + rnd() * 0.18;
+    const hp = S.ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 220;
+    const eq = S.ctx.createBiquadFilter(); eq.type = "peaking"; eq.frequency.value = 2850; eq.Q.value = 1.1; eq.gain.value = 4.5;
+    const env = S.ctx.createGain();
+    const v = Math.min(1, 0.92 * s * S.trim);
+    env.gain.setValueAtTime(0.0001, t0);
+    env.gain.linearRampToValueAtTime(v, t0 + 0.003);
+    env.gain.setValueAtTime(v, t0 + 0.19);
+    env.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.31);
+    src.connect(hp); hp.connect(eq); eq.connect(env);
+    S.out(env, S.voice, 0.2);
+    src.start(t0, 0.06);
+    src.stop(t0 + 0.33);
+  }
+
+  // 3) Chillido sintetico por formantes distorsionados + cluster disonante agudo (ataque instantaneo, corte rapido)
+  S.formantVoice({
+    t: t0,
+    f0: 840,
+    f1: 2750,
+    dur: 0.3,
+    vol: 0.95 * s,
+    a: 0.002,
+    formants: [[1050, 3.2, 1.5], [2350, 4.0, 1.4], [3650, 4.8, 1.1]],
+    dist: true,
+    vibRate: 46,
+    vibDepth: 175,
+    noiseMix: 0.45,
+    dest: S.voice,
+    send: 0.22,
+  });
+  S.formantVoice({
+    t: t0 + 0.008,
+    f0: 1580,
+    f1: 3450,
+    dur: 0.26,
+    vol: 0.82 * s,
+    a: 0.002,
+    formants: [[1480, 4.5, 1.4], [2980, 5.5, 1.2], [4300, 6.0, 0.9]],
+    dist: true,
+    vibRate: 54,
+    vibDepth: 190,
+    noiseMix: 0.38,
+    dest: S.voice,
+    send: 0.18,
+  });
+
+  // Acorde metalico de tritono en puñalada
+  [293.7, 311.1, 415.3, 587.3, 830.6, 1174.7].forEach((f, i) =>
+    S.tone({
+      type: "sawtooth",
+      f0: f * 2.1,
+      f1: f * 1.45,
+      t: t0,
+      dur: 0.26,
+      vol: 0.17 * s,
+      lp: 4800,
+      a: 0.001,
+      detune: (i - 2.5) * 22,
+      dest: S.voice,
+      send: 0.25,
+    }),
+  );
 }
 
 export function heartbeat(S: Synth, strength: number): void {
@@ -350,3 +438,56 @@ export function hide(S: Synth, inside: boolean): void {
   S.tone({ f0: 120, f1: 50, dur: 0.2, vol: 0.6, t: S.now + 0.5, a: 0.002 });
   if (inside) S.duck(0.3, 2.5);
 }
+
+/** Aviso de tuberia a punto de reventar: traqueteo metalico y silbido creciente espacializado. */
+export function steamWarning(S: Synth, x: number, y: number, z: number): void {
+  const p = S.panner(x, y, z, 2.2, 0.9);
+  p.connect(S.sfx);
+  const send = S.ctx.createGain(); send.gain.value = 0.35; p.connect(send); send.connect(S.reverbSend);
+  S.tone({ type: "triangle", f0: 620, f1: 1850, dur: 1.15, vol: 0.14, a: 0.15, lp: 3200, dest: p });
+  S.noise({ bp: 2400, bp1: 4200, q: 4.5, dur: 1.2, vol: 0.32, a: 0.2, dest: p });
+  for (let i = 0; i < 3; i++) {
+    S.tone({ f0: 180 + i * 35, f1: 75, dur: 0.09, vol: 0.35, t: S.now + i * 0.28, dest: p });
+  }
+}
+
+/** Estallido de vapor a presion en un pasillo (espacializado). */
+export function steamBurst(S: Synth, x: number, y: number, z: number): void {
+  const p = S.panner(x, y, z, 2.6, 0.85);
+  p.connect(S.sfx);
+  const send = S.ctx.createGain(); send.gain.value = 0.45; p.connect(send); send.connect(S.reverbSend);
+  // Golpe metalico inicial de la valvula + chorro denso de vapor
+  S.tone({ f0: 145, f1: 42, dur: 0.28, vol: 0.75, a: 0.003, dest: p });
+  S.noise({ kind: "white", bp: 1800, bp1: 1100, q: 1.4, dur: 2.6, vol: 0.65, a: 0.02, dest: p });
+  S.noise({ kind: "pink", hp: 2600, dur: 2.2, vol: 0.38, a: 0.05, dest: p });
+}
+
+/** Tos ahogada y quemadura leve al respirar vapor hirviendo. */
+export function steamCough(S: Synth): void {
+  S.noise({ kind: "pink", bp: 950, bp1: 480, q: 2.8, dur: 0.26, vol: 0.42, a: 0.01, send: 0.3 });
+  S.formantVoice({ f0: 165, f1: 95, dur: 0.28, vol: 0.32, formants: [[620, 4, 1], [1380, 5, 0.6]], noiseMix: 0.45, send: 0.25 });
+  S.tone({ f0: 72, f1: 38, dur: 0.24, vol: 0.45 });
+}
+
+/** Disparo de disyuntor / apagon general de sector desde la caja de fusibles (espacializado). */
+export function breakerTrip(S: Synth, x: number, y: number, z: number): void {
+  const p = S.panner(x, y, z, 3.0, 0.7);
+  p.connect(S.sfx);
+  const send = S.ctx.createGain(); send.gain.value = 0.55; p.connect(send); send.connect(S.reverbSend);
+  // Chispa electrica + golpe seco de palanca + caida grave de transformador
+  S.noise({ hp: 2400, dur: 0.16, vol: 0.55, a: 0.002, dest: p });
+  S.tone({ type: "sawtooth", f0: 140, f1: 48, dur: 0.24, vol: 0.65, lp: 900, dest: p });
+  S.tone({ type: "sawtooth", f0: 380, f1: 28, dur: 1.15, vol: 0.28, lp: 800, a: 0.04, dest: p });
+  S.tone({ f0: 54, f1: 22, dur: 1.2, vol: 0.6, dest: p });
+}
+
+/** Roce sordo de muros de hormigon/piedra al cambiar un pasillo a espaldas del jugador. */
+export function mazeShift(S: Synth, x: number, y: number, z: number): void {
+  const p = S.panner(x, y, z, 2.5, 0.8);
+  p.connect(S.sfx);
+  const send = S.ctx.createGain(); send.gain.value = 0.6; p.connect(send); send.connect(S.reverbSend);
+  S.noise({ kind: "brown", lp: 240, dur: 1.1, vol: 0.75, a: 0.08, dest: p });
+  S.tone({ type: "triangle", f0: 62, f1: 31, dur: 1.05, vol: 0.65, a: 0.06, lp: 180, dest: p });
+  S.noise({ kind: "pink", bp: 340, bp1: 180, q: 3.0, dur: 0.85, vol: 0.35, a: 0.1, dest: p });
+}
+

@@ -23,7 +23,27 @@ function cellDistance(g: GhostSim, x: number, z: number): number {
   return Math.hypot(g.x - x, g.z - z) / CELL;
 }
 
-/** True si el fantasma tiene al jugador en su cono de vision y sin muro de por medio. */
+/** True si una nube de vapor en erupcion se interpone en el segmento visual entre dos puntos. */
+export function blockedBySteam(
+  x0: number,
+  z0: number,
+  x1: number,
+  z1: number,
+  activeSteam?: readonly { x: number; z: number }[],
+): boolean {
+  if (!activeSteam || !activeSteam.length) return false;
+  const dx = x1 - x0, dz = z1 - z0;
+  const len2 = dx * dx + dz * dz;
+  if (len2 < 1.4) return false; // a quemarropa el vapor no impide verte
+  for (const s of activeSteam) {
+    const t = Math.max(0, Math.min(1, ((s.x - x0) * dx + (s.z - z0) * dz) / len2));
+    const px = x0 + dx * t, pz = z0 + dz * t;
+    if ((s.x - px) ** 2 + (s.z - pz) ** 2 < 1.25 * 1.25) return true;
+  }
+  return false;
+}
+
+/** True si el fantasma tiene al jugador en su cono de vision y sin muro ni cortina de vapor de por medio. */
 export function canSee(g: GhostSim, maze: Maze, ctx: AIContext): boolean {
   const d = cellDistance(g, ctx.playerX, ctx.playerZ);
   if (d > ctx.viewCells) return false;
@@ -33,6 +53,7 @@ export function canSee(g: GhostSim, maze: Maze, ctx: AIContext): boolean {
     const len = Math.hypot(dx, dz) || 1;
     if ((fx * dx + fz * dz) / len < ctx.fovCos) return false;
   }
+  if (d > 3.5 && blockedBySteam(g.x, g.z, ctx.playerX, ctx.playerZ, ctx.activeSteam)) return false;
   return maze.rayClear(g.x, g.z, ctx.playerX, ctx.playerZ, 0.4);
 }
 
@@ -66,10 +87,17 @@ export function noticePlayer(g: GhostSim, ctx: AIContext, dt: number): void {
   }
 }
 
-/** Celda de barrido alrededor del ultimo avistamiento (determinista, sin azar). */
+/** Celda de barrido alrededor del ultimo avistamiento: en equipo cada fantasma de apoyo explora una rama distinta. */
 export function searchTarget(g: GhostSim, ctx: AIContext): Cell {
   const base = g.lastSeen ?? ctx.playerCell;
-  const step = Math.floor(g.lostT * 0.8 + g.kind * 1.7);
+  const step = Math.floor(g.lostT * 0.8 + g.kind * 2.1);
+  if (g.kind !== 0 && otherHunters(g, ctx).length > 0) {
+    const branches = DIRS.filter(([dx, dy]) => ctx.maze.isWalkable(base[0] + dx, base[1] + dy));
+    if (branches.length >= 2) {
+      const dir = branches[(step + g.kind) % branches.length];
+      return ctx.maze.nearestWalkable(junctionAhead(ctx.maze, base, dir, 3));
+    }
+  }
   const off = SEARCH_RING[step % SEARCH_RING.length];
   return ctx.maze.nearestWalkable([base[0] + off[0], base[1] + off[1]]);
 }

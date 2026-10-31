@@ -23,7 +23,7 @@ export class HudController implements HudApi {
     this.root = root;
     for (const n of ["score", "high", "level", "nodes", "lives", "stamina", "battery", "bite", "staminaLabel", "batteryLabel",
       "power", "powerFill", "message", "hint", "radar", "popups", "vignette", "flash", "exit", "fruit", "mute", "cam",
-      "crosshair", "hide", "exitArrow"]) {
+      "crosshair", "hide", "heartGame", "hideTitle", "heartLabel", "heartStress", "heartZone", "heartCursor", "exitArrow"]) {
       this.el[n] = q(root, n);
     }
   }
@@ -77,12 +77,47 @@ export class HudController implements HudApi {
       e.fruit.textContent = v ? `${v} DISPONIBLE` : "";
       e.fruit.style.opacity = v ? "1" : "0";
     });
-    this.set("cam", "cam", `${s.camera}|${s.hidden}`, () => {
-      e.cam.textContent = s.hidden ? "ESCONDIDO" : s.camera === "fp" ? "1ª PERSONA [C]" : "3ª PERSONA [C]";
+    this.set("cam", "cam", `${s.camera}|${s.hidden}|${s.hideKind ?? ""}`, () => {
+      const hideTag =
+        s.hideKind === "vent" ? "CONDUCTO" :
+        s.hideKind === "table" ? "BAJO MESA" :
+        "ARMARIO";
+      e.cam.textContent = s.hidden ? `ESCONDIDO (${hideTag})` : s.camera === "fp" ? "1ª PERSONA [C]" : "3ª PERSONA [C]";
     });
     this.set("crosshair", "crosshair", s.crosshair ? "1" : "0", (v) => { e.crosshair.style.opacity = v; });
     this.set("hide", "hide", s.hidden ? "1" : "0", (v) => { e.hide.style.opacity = v; });
     this.set("holding", "hide", s.holding ? "1" : "0", (v) => { e.hide.dataset.holding = v; });
+    this.set("hideKind", "hideTitle", s.hideKind ?? "locker", (v) => {
+      e.hideTitle.textContent =
+        v === "vent" ? "CONDUCTO DE VENTILACIÓN" :
+        v === "table" ? "BAJO LA MESA" :
+        "ARMARIO METÁLICO";
+    });
+    this.set("heartGame", "heartGame", s.hidden && s.heartMinigame ? "1" : "0", (v) => {
+      e.heartGame.style.opacity = v;
+    });
+    if (s.hidden && s.heartMinigame) {
+      const winPct = Math.round(s.heartWindow * 200);
+      this.set("heartZone", "heartZone", String(winPct), (v) => {
+        e.heartZone.style.width = `${v}%`;
+      });
+      const phasePct = Math.round(s.heartPhase * 100);
+      this.set("heartCursor", "heartCursor", String(phasePct), (v) => {
+        e.heartCursor.style.left = `${v}%`;
+      });
+      const stressPct = Math.round(s.heartStress * 100);
+      this.set("heartStress", "heartStress", String(stressPct), (v) => {
+        e.heartStress.style.width = `${v}%`;
+      });
+      const fb = s.heartFeedback > 0.15 ? "hit" : s.heartFeedback < -0.15 ? "miss" : "idle";
+      this.set("heartFb", "heartGame", fb, (v) => {
+        e.heartGame.dataset.feedback = v;
+        e.heartLabel.textContent =
+          v === "hit" ? "LATIDO EN CALMA" :
+          v === "miss" ? "¡PULSO DESCOMPASADO!" :
+          "PULSA [ESPACIO] EN EL CENTRO";
+      });
+    }
     // el miedo sube a saltos de 0,05 para no tocar el DOM en cada frame
     this.set("threat", "hide", (Math.round(s.hideThreat * 20) / 20).toFixed(2), (v) => { e.hide.style.setProperty("--threat", v); });
     // flecha de la salida: se mueve a saltos de 3 grados

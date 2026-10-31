@@ -19,7 +19,7 @@ import { BreathEngine, GhostVoice } from "./voices";
  */
 const MIX = {
   waka: 0.4, step: 0.6, bite: 0.26, ghostEaten: 0.32, pellet: 0.5, heartbeat: 0.75, scream: 0.8,
-  screamerFlash: 0.6, scareHit: 0.75, pickup: 0.5, switchOn: 0.6, hide: 0.7, dread: 0.6, flashlight: 0.6, fruit: 0.5, wake: 0.6, pant: 1.1,
+  screamerFlash: 0.95, scareHit: 0.9, pickup: 0.5, switchOn: 0.6, hide: 0.7, dread: 0.6, flashlight: 0.6, fruit: 0.5, wake: 0.6, pant: 1.1,
 } as const;
 
 /** Buffer elegido a mano desde el panel F9 (clave nueva: la automatica de la version anterior se ignora). */
@@ -465,13 +465,16 @@ export class HorrorAudio implements GameAudio {
         exertion: f.exertion, tension: f.tension, running: f.running, exhausted: f.exhausted,
         hidden: f.hidden, hiddenNearGhost: f.hiddenNearGhost, holding: f.holding,
       });
+      if (f.exhausted) {
+        S.duck(0.28, 0.45);
+      }
     }
-    // solo suenan los 2 fantasmas mas cercanos: el tercero y el cuarto quedan tapados por estos y cuestan nodos
-    const near = f.ghosts.length > 2 ? [...f.ghosts].sort((x, y) => x.dist - y.dist).slice(0, 2) : f.ghosts;
+    // suenan hasta los 3 fantasmas mas cercanos con espacializacion HRTF, oclusion y escucha agudizada al esconderse
+    const near = f.ghosts.length > 3 ? [...f.ghosts].sort((x, y) => x.dist - y.dist).slice(0, 3) : f.ghosts;
     for (const g of near) {
       let v = this.voices.get(g.kind);
       if (!v) { v = new GhostVoice(S, g.kind); this.voices.set(g.kind, v); }
-      v.update(f.dt, g, f.tension);
+      v.update(f.dt, g, f.tension, !!f.hidden);
     }
   }
 
@@ -495,7 +498,14 @@ export class HorrorAudio implements GameAudio {
   playFruitSpawn(): void { this.with((S) => fx.fruitSpawn(S)); }
   playFruit(): void { this.with((S) => fx.fruitEaten(S), MIX.fruit); }
   playStep(running: boolean): void { this.with((S) => fx.step(S, running), MIX.step); }
-  playExhausted(): void { this.with((S) => this.breath.gasp(S), MIX.pant); }
+  playExhausted(): void {
+    this.with((S) => {
+      S.duck(0.24, 2.6);
+      S.muffle(1050, 0.18, 1.5, 1.2);
+      this.breath.gasp(S);
+      fx.heartbeat(S, 1.0);
+    }, MIX.pant);
+  }
   playRecovered(): void { this.with((S) => this.breath.sigh(S)); }
   playBatteryDead(): void { this.with((S) => fx.batteryDead(S)); }
   playFlashlight(on: boolean): void { this.with((S) => fx.flashlight(S, on), MIX.flashlight); }
@@ -518,7 +528,7 @@ export class HorrorAudio implements GameAudio {
   playFootsteps(x: number, y: number, z: number): void { this.with((S) => fx.footsteps(S, x, y, z)); }
   playBeacon(x: number, y: number, z: number): void { this.with((S) => fx.beacon(S, x, y, z), MIX.hide); }
   playBlackout(on: boolean): void { this.with((S) => fx.blackout(S, on)); }
-  playScreamerFlash(): void { this.with((S) => fx.screamerFlash(S), MIX.screamerFlash); }
+  playScreamerFlash(strength = 1): void { this.with((S) => fx.screamerFlash(S, strength), MIX.screamerFlash); }
   duck(level: number, secs: number): void { this.S?.duck(level, secs); }
   playPickup(): void { this.with((S) => fx.pickup(S), MIX.pickup); }
   playSwitch(): void { this.with((S) => fx.switchOn(S), MIX.switchOn); }
@@ -529,6 +539,11 @@ export class HorrorAudio implements GameAudio {
   playDread(kind: string): void {
     this.with((S) => this.dread?.play(kind as DreadKind, { dt: 0, tension: 0, chasing: false, intensity: 1, listener: { x: S.ctx.listener.positionX?.value ?? 0, z: S.ctx.listener.positionZ?.value ?? 0, fx: S.ctx.listener.forwardX?.value ?? 0, fz: S.ctx.listener.forwardZ?.value ?? -1 } }), MIX.dread);
   }
+  playSteamWarning(x: number, y: number, z: number): void { this.with((S) => fx.steamWarning(S, x, y, z), 0.55); }
+  playSteamBurst(x: number, y: number, z: number): void { this.with((S) => fx.steamBurst(S, x, y, z), 0.65); }
+  playSteamCough(): void { this.with((S) => fx.steamCough(S), 0.65); }
+  playBreakerTrip(x: number, y: number, z: number): void { this.with((S) => fx.breakerTrip(S, x, y, z), 0.7); }
+  playMazeShift(x: number, y: number, z: number): void { this.with((S) => fx.mazeShift(S, x, y, z), 0.65); }
 
   dispose(): void {
     this.unbindEarlyGestures();

@@ -10,9 +10,9 @@ import {
   GhostSim, chooseFlee, chooseToward,
   type AIContext, type GhostKind,
 } from "./ghost";
-import { chaseTarget, isAlerted, noticePlayer } from "./hunt";
-import { generateLayout, type LevelLayout } from "./layout";
-import { DIRS, Maze, type Cell } from "./maze";
+import { blockedBySteam, chaseTarget, isAlerted, noticePlayer } from "./hunt";
+import { generateLayout, type HideSpotKind, type LevelLayout } from "./layout";
+import { DIRS, Maze, UNREACHABLE, type Cell } from "./maze";
 import { PlayerSim, type PlayerInput } from "./player";
 import { mulberry32, type Rng } from "./rng";
 import { Trail } from "./trail";
@@ -28,9 +28,18 @@ export interface SimInit {
   lives?: number;
 }
 
-export interface HideSpotState { cell: Cell; wall: Cell; x: number; z: number }
+export interface HideSpotState { cell: Cell; wall: Cell; kind: HideSpotKind; x: number; z: number }
 export interface SwitchState { cell: Cell; wall: Cell; zone: number; x: number; z: number }
 export interface BatteryState { x: number; z: number; taken: boolean }
+export interface SteamVentState {
+  cell: Cell;
+  wall: Cell;
+  x: number;
+  z: number;
+  state: "idle" | "warning" | "erupting";
+  timer: number;
+  cooldown: number;
+}
 
 export interface PelletState {
   cell: Cell;
@@ -93,8 +102,24 @@ export class Simulation {
   batteries: BatteryState[] = [];
   switches: SwitchState[] = [];
   hideSpots: HideSpotState[] = [];
+  /** Valvulas de vapor dinamicas repartidas por los pasillos. */
+  steamVents: SteamVentState[] = [];
+  /** Exposicion actual al vapor hirviendo (0..1): nubla la vista y drena aliento/bateria. */
+  steamExposure = 0;
+  private steamHurtCd = 0;
   /** Segundos que le quedan de luz a cada zona oscura tras usar su interruptor. */
   zoneLit: number[] = [];
+  /** Segundos restantes de parpadeo previo a un apagon general de zona. */
+  zoneFlicker: number[] = [];
+  /** Zonas en apagon general de sector (oscuridad expandida hasta reactivar su interruptor). */
+  sectorOutage: boolean[] = [];
+  private sectorOutageTimer: number[] = [];
+  private blackoutTimer = 26;
+  private shiftTimer = 20;
+  private turnAcc = 0;
+  private lastYaw = 0;
+  shiftCount = 0;
+  private envRng: Rng;
   /** Escondite en el que esta el jugador (o null). */
   hidden: HideSpotState | null = null;
   /** Algun fantasma vio al jugador entrar: lo seguira hasta el escondite. */
@@ -108,8 +133,26 @@ export class Simulation {
   private suspicion = new Map<GhostSim, number>();
   /** Mayor sospecha actual (para el latido y el sonido). */
   hideThreat = 0;
-  /** True mientras el jugador contiene la respiracion dentro del armario. */
+  /** True mientras el jugador contiene la respiracion o mantiene el pulso dentro del escondite. */
   holdingBreath = false;
+  /** Fantasmas que vieron directamente al jugador entrar en el escondite actual. */
+  private witnesses = new Set<GhostSim>();
+  /** Fantasmas que oyeron un jadeo de fallo a corta distancia frente al escondite. */
+  private gaspExposed = new Set<GhostSim>();
+  /** Estado del minijuego ritmico de latido del corazon al esconderse con un fantasma cerca. */
+  heartMinigame = false;
+  /** Fase actual del pulso cardiaco (0..1); la zona central de acierto esta en torno a 0.5. */
+  heartPhase = 0;
+  /** Semiancho de la ventana central de acierto (0.14..0.21 segun tipo de escondite). */
+  heartWindow = 0.18;
+  /** Tension cardiaca acumulada por fallar latidos (0..1); al llegar a 1 provoca un jadeo audible. */
+  heartStress = 0;
+  /** Retroalimentacion del ultimo pulso (-1 fallo, +1 acierto, decae hacia 0). */
+  heartFeedback = 0;
+  /** Segundos de calma ganados tras acertar un latido al ritmo. */
+  private rhythmCalm = 0;
+  private beatHandled = false;
+  private prevSonarInput = false;
   private holdLock = false;
   private holdInput = false;
   fruit = { active: false, x: 0, z: 0, timer: 0, spawned: 0 };
@@ -144,6 +187,7 @@ export class Simulation {
     });
     this.maze = new Maze(this.layout);
     this.rng = init.rng ?? mulberry32((init.level.seed ^ 0x9e3779b9) >>> 0);
+    this.envRng = mulberry32((init.level.seed ^ 0x5f3759df) >>> 0);
     this.score = init.score ?? 0;
     this.lives = init.lives ?? init.difficulty.lives;
 
@@ -162,8 +206,16 @@ export class Simulation {
 
     this.batteries = this.layout.batteries.map((c) => { const w = this.maze.cellToWorld(c[0], c[1]); return { x: w.x, z: w.z, taken: false }; });
     this.switches = this.layout.switches.map((sw) => { const w = this.maze.cellToWorld(sw.cell[0], sw.cell[1]); return { ...sw, x: w.x, z: w.z }; });
-    this.hideSpots = this.layout.hideSpots.map((h) => { const w = this.maze.cellToWorld(h.cell[0], h.cell[1]); return { ...h, x: w.x, z: w.z }; });
+    const fallbackKinds: HideSpotKind[] = ["locker", "vent", "table"];
+    this.hideSpots = this.layout.hideSpots.map((h, i) => {
+      const w = this.maze.cellToWorld(h.cell[0], h.cell[1]);
+      return { ...h, kind: h.kind ?? fallbackKinds[i % 3], x: w.x, z: w.z };
+    });
     this.zoneLit = this.layout.zones.map(() => 0);
+    this.zoneFlicker = this.layout.zones.map(() => 0);
+    this.sectorOutage = this.layout.zones.map(() => false);
+    this.sectorOutageTimer = this.layout.zones.map(() => 0);
+    this.initSteamVents();
 
     const corners: Cell[] = [[W - 2, 1], [1, 1], [W - 2, H - 2], [1, H - 2]];
     const count = Math.max(1, Math.min(4, this.level.ghosts + this.diff.extraGhosts));
@@ -248,13 +300,23 @@ export class Simulation {
     this.hidden = null;
     this.hiddenSeen = false;
     this.hiddenSuspected = false;
+    this.witnesses.clear();
+    this.gaspExposed.clear();
     this.suspicion.clear();
     this.hideThreat = 0; this.holdingBreath = false; this.holdLock = false;
+    this.heartMinigame = false; this.heartPhase = 0; this.heartStress = 0; this.heartFeedback = 0;
+    this.rhythmCalm = 0; this.beatHandled = false; this.prevSonarInput = false;
     for (const gh of this.ghosts) { gh.checkSpot = -1; gh.checkT = 0; }
     this.searchT.clear();
     this.attemptTime = 0;
     this.frightTimer = 0;
     this.combo = 0;
+    this.steamExposure = 0;
+    this.steamHurtCd = 0;
+    this.lastYaw = this.player.viewYaw;
+    this.turnAcc = 0;
+    this.blackoutTimer = 22 / this.envScale;
+    this.shiftTimer = 18 / this.envScale;
     this.waveIndex = 0;
     this.waveMode = "scatter";
     this.waveTimer = this.waveDuration(0);
@@ -322,7 +384,10 @@ export class Simulation {
     this.hideCd = Math.max(0, this.hideCd - dt);
     for (let i = 0; i < this.zoneLit.length; i++) this.zoneLit[i] = Math.max(0, this.zoneLit[i] - dt);
     if (input.interact) this.tryInteract();
-    this.holdInput = !!this.hidden && !!input.sonar;
+    const sonarDown = !!input.sonar;
+    const sonarPressed = sonarDown && !this.prevSonarInput;
+    this.prevSonarInput = sonarDown;
+    this.holdInput = !!this.hidden && sonarDown;
     const stam0 = this.player.stamina;
     const pin: PlayerInput = this.hidden ? { forward: 0, strafe: 0, sprint: false, sonar: false, lookBack: false } : input;
 
@@ -339,13 +404,16 @@ export class Simulation {
     if (input.bite && !this.hidden) this.tryBite();
 
     if (this.hidden) {
-      this.updateBreath(dt, stam0);
+      this.updateBreath(dt, stam0, sonarPressed);
       const h = this.hidden;
-      this.player.x = h.x + h.wall[0] * HIDE_DEPTH; this.player.z = h.z + h.wall[1] * HIDE_DEPTH;
+      const depth = this.hideDepth(h.kind);
+      this.player.x = h.x + h.wall[0] * depth; this.player.z = h.z + h.wall[1] * depth;
       this.player.vx = 0; this.player.vz = 0; this.player.noise = 0;
     }
     this.checkBatteries();
 
+    this.updateSteamVents(dt);
+    this.updateBlackouts(dt);
     this.updateWaves(dt);
     this.updateGhosts(dt);
     this.updateSuspicion(dt);
@@ -354,6 +422,7 @@ export class Simulation {
     this.checkDots();
     this.checkPellets();
     this.updateFruit(dt);
+    this.updateMazeShift(dt);
     this.checkExit();
   }
 
@@ -429,6 +498,7 @@ export class Simulation {
     ctx.playerView = p.viewHeading;
     ctx.playerRunning = p.running;
     ctx.playerNoisy = !this.hidden && p.noise > 0.6;
+    ctx.activeSteam = this.steamVents.filter((v) => v.state === "erupting").map((v) => ({ x: v.x, z: v.z }));
     const baseSpeed = K.GHOST_SPEED_BASE * this.level.ghostSpeed * this.diff.ghostSpeed;
     const elroy = this.elroyLevel();
 
@@ -516,25 +586,40 @@ export class Simulation {
         if (this.hidden) {
           const distToHide = Math.hypot(g.x - this.hidden.x, g.z - this.hidden.z);
           const st = this.searchT.get(g) ?? 0;
-          if (distToHide < HIDE_SEARCH_RANGE && st >= 0 && this.maze.rayClear(g.x, g.z, this.player.x, this.player.z, 0.4)) {
-            // ghost stops in front of the locker to inspect it
+          const shouldInspect =
+            g.mode === "chase" ||
+            this.witnesses.has(g) ||
+            this.gaspExposed.has(g) ||
+            this.hiddenSeen ||
+            this.hiddenSuspected ||
+            (g.checkSpot >= 0 && this.hideSpots[g.checkSpot] === this.hidden);
+          if (shouldInspect && distToHide < HIDE_SEARCH_RANGE && st >= 0 && this.maze.rayClear(g.x, g.z, this.player.x, this.player.z, 0.4)) {
+            // el fantasma se detiene frente al escondite para registrarlo (en patrulla scatter sin pistas pasa de largo)
             speed = 0;
             gaze = this.doorOf(this.hidden); // mira la puerta
           }
         }
-        // revision de un armario: se detiene junto a el mirando hacia dentro y luego sigue
+        // revision de un escondite: se detiene junto a el mirando hacia dentro y luego sigue
         const chk = this.hideSpots[g.checkSpot];
         if (chk && Math.hypot(g.x - chk.x, g.z - chk.z) < 0.6) {
           speed = 0;
           gaze = this.doorOf(chk);
           g.checkT += dt;
-          if (g.checkT >= CHECK_LINGER) { g.checkedAt[g.checkSpot] = this.time; g.checkSpot = -1; g.checkT = 0; }
+          if (g.checkT >= CHECK_LINGER) {
+            g.checkedAt[g.checkSpot] = this.time;
+            g.checkSpot = -1;
+            g.checkT = 0;
+            if (this.hidden && !this.witnesses.has(g) && !this.gaspExposed.has(g)) {
+              g.lastSeen = null;
+              g.reverseQueued = true;
+            }
+          }
         } else if (g.checkSpot >= 0 && !chk) { g.checkSpot = -1; g.checkT = 0; }
         g.speedCells = speed;
         wrapped = g.advance(this.maze, dt, (gg) => {
           let target: Cell;
-          if (this.hidden && (this.hiddenSeen || this.hiddenSuspected)) {
-            // inspeccion activa del armario donde vieron u oyeron entrar al jugador
+          if (this.hidden && (this.witnesses.has(gg) || this.gaspExposed.has(gg) || this.hiddenSeen || this.hiddenSuspected)) {
+            // inspeccion activa del escondite donde vieron u oyeron entrar al jugador
             target = this.hidden.cell;
           } else if (mode === "scatter") {
             target = gg.corner;
@@ -627,9 +712,14 @@ export class Simulation {
     for (let i = 0; i < zones.length; i++) {
       const w = this.maze.cellToWorld(zones[i].cell[0], zones[i].cell[1]);
       const d = Math.hypot(w.x - x, w.z - z) / K.CELL;
-      const r = zones[i].r;
+      const outage = this.sectorOutage[i] ? 1.85 : 1.0;
+      const r = zones[i].r * outage;
       const t = Math.max(0, Math.min(1, (d - (r - 1.0)) / 1.9));
-      const f = (1 - t * t * (3 - 2 * t)) * (1 - Math.max(0, Math.min(1, this.zoneLit[i] / 1.5)));
+      let f = (1 - t * t * (3 - 2 * t)) * (1 - Math.max(0, Math.min(1, this.zoneLit[i] / 1.5)));
+      if (this.zoneFlicker[i] > 0) {
+        const fl = Math.sin(this.time * 38 + i * 2) > 0 ? 0.25 : 0.88;
+        f = Math.max(f, (1 - t * t * (3 - 2 * t)) * fl);
+      }
       if (f > best) best = f;
     }
     return best;
@@ -644,7 +734,55 @@ export class Simulation {
     if (spot) { this.enterHide(spot); return; }
     let sw: SwitchState | null = null, wd = 1.9;
     for (const s of this.switches) { const d = Math.hypot(s.x - p.x, s.z - p.z); if (d < wd) { wd = d; sw = s; } }
-    if (sw && this.zoneLit[sw.zone] <= 0) this.useSwitch(sw);
+    if (sw && (this.zoneLit[sw.zone] <= 0 || this.sectorOutage[sw.zone] || this.zoneFlicker[sw.zone] > 0)) this.useSwitch(sw);
+  }
+
+  /** Altura de la camara dentro de cada tipo de escondite. */
+  hideEyeHeight(kind: HideSpotKind): number {
+    switch (kind) {
+      case "vent": return 0.34;
+      case "table": return 0.48;
+      case "locker":
+      default: return K.EYE_H;
+    }
+  }
+
+  /** Limite de giro horizontal (radianes a cada lado) dentro de cada tipo de escondite. */
+  hideYawLimit(kind: HideSpotKind): number {
+    switch (kind) {
+      case "table": return 1.36; // vision panoramica bajo la mesa
+      case "vent": return 0.82;  // rejilla horizontal baja
+      case "locker":
+      default: return 0.62;      // rendijas estrechas del armario
+    }
+  }
+
+  /** Profundidad hacia el muro a la que se coloca el jugador dentro del escondite. */
+  hideDepth(kind: HideSpotKind): number {
+    switch (kind) {
+      case "vent": return 0.98;
+      case "table": return 0.82;
+      case "locker":
+      default: return HIDE_DEPTH;
+    }
+  }
+
+  /** Semiancho de la ventana central del minijuego cardiaco segun el escondite. */
+  hideHeartWindow(kind: HideSpotKind): number {
+    switch (kind) {
+      case "locker": return 0.20;
+      case "table": return 0.17;
+      case "vent": return 0.15;
+    }
+  }
+
+  /** Multiplicador de visibilidad/sospecha segun la cobertura del escondite. */
+  private hideCoverFactor(kind: HideSpotKind): number {
+    switch (kind) {
+      case "vent": return 0.78;  // el conducto bajo es el mas discreto
+      case "locker": return 1.0;
+      case "table": return 1.12; // bajo la mesa tienes mejor vista pero menos cobertura
+    }
   }
 
   /** Lo que el jugador puede hacer ahora con E (para la pista de la interfaz). */
@@ -652,25 +790,62 @@ export class Simulation {
     if (this.hidden) return "leave";
     const p = this.player;
     if (this.hideCd <= 0) for (const h of this.hideSpots) if (Math.hypot(h.x - p.x, h.z - p.z) < 1.9) return "hide";
-    for (const s of this.switches) if (this.zoneLit[s.zone] <= 0 && Math.hypot(s.x - p.x, s.z - p.z) < 1.9) return "switch";
+    for (const s of this.switches) {
+      if ((this.zoneLit[s.zone] <= 0 || this.sectorOutage[s.zone] || this.zoneFlicker[s.zone] > 0) && Math.hypot(s.x - p.x, s.z - p.z) < 1.9) return "switch";
+    }
     return null;
+  }
+
+  /** Tipo de escondite con el que se puede interactuar ahora mismo (o en el que se esta dentro). */
+  get interactHideKind(): HideSpotKind | null {
+    if (this.hidden) return this.hidden.kind;
+    if (this.hideCd > 0) return null;
+    const p = this.player;
+    let spot: HideSpotState | null = null, sd = 1.9;
+    for (const h of this.hideSpots) {
+      const d = Math.hypot(h.x - p.x, h.z - p.z);
+      if (d < sd) { sd = d; spot = h; }
+    }
+    return spot ? spot.kind : null;
   }
 
   private enterHide(h: HideSpotState): void {
     const p = this.player;
     this.hidden = h;
-    this.hideCd = 0.6;
-    const seen = this.ghosts.some((g) => g.lethal && Math.hypot(g.x - p.x, g.z - p.z) < 10 && this.maze.rayClear(p.x, p.z, g.x, g.z, 0.4));
-    const heard = !seen && (p.running || p.exhausted) && this.ghosts.some((g) => g.lethal && Math.hypot(g.x - p.x, g.z - p.z) < 12);
+    this.hideCd = h.kind === "vent" ? 0.35 : 0.6;
+    const activeSteam = this.steamVents.filter((v) => v.state === "erupting");
+    const canGhostSeeEntry = (g: GhostSim): boolean => {
+      if (!g.lethal) return false;
+      const dd = Math.hypot(g.x - p.x, g.z - p.z);
+      if (dd >= 10) return false;
+      if (!this.maze.rayClear(p.x, p.z, g.x, g.z, 0.4)) return false;
+      if (blockedBySteam(p.x, p.z, g.x, g.z, activeSteam)) return false;
+      return true;
+    };
+    this.witnesses.clear();
+    this.gaspExposed.clear();
+    for (const g of this.ghosts) {
+      if (canGhostSeeEntry(g)) this.witnesses.add(g);
+    }
+    const seen = this.witnesses.size > 0;
+    const hearRange = h.kind === "vent" ? 9.5 : 12;
+    const heard = !seen && (p.running || p.exhausted) && this.ghosts.some((g) => g.lethal && Math.hypot(g.x - p.x, g.z - p.z) < hearRange);
     this.hiddenSeen = seen;
     this.hiddenSuspected = heard;
     this.suspicion.clear();
     this.holdLock = false;
+    this.heartMinigame = false;
+    this.heartPhase = 0;
+    this.heartWindow = this.hideHeartWindow(h.kind);
+    this.heartStress = 0;
+    this.heartFeedback = 0;
+    this.rhythmCalm = 0;
+    this.beatHandled = false;
     for (const g of this.ghosts) {
       if (!g.lethal) continue;
       const dd = Math.hypot(g.x - p.x, g.z - p.z);
-      if (dd < 10 && this.maze.rayClear(p.x, p.z, g.x, g.z, 0.4)) this.suspicion.set(g, ENTER_SEEN);
-      else if ((p.running || p.exhausted) && dd < 12) this.suspicion.set(g, ENTER_HEARD);
+      if (this.witnesses.has(g)) this.suspicion.set(g, ENTER_SEEN);
+      else if ((p.running || p.exhausted) && dd < hearRange) this.suspicion.set(g, ENTER_HEARD);
     }
     // si nadie te vio ni te oyo entrar, pierden el rastro
     if (!seen && !heard) {
@@ -680,25 +855,35 @@ export class Simulation {
     this.prevLight = p.flashlightOn;
     p.flashlightOn = false;
     p.sonarOpen = false; p.running = false;
-    p.x = h.x + h.wall[0] * HIDE_DEPTH; p.z = h.z + h.wall[1] * HIDE_DEPTH;
+    const depth = this.hideDepth(h.kind);
+    p.x = h.x + h.wall[0] * depth; p.z = h.z + h.wall[1] * depth;
     p.yaw = Math.atan2(h.wall[0], h.wall[1]); // mira hacia fuera del hueco
     this.searchT.clear();
-    this.emit({ type: "hide", inside: true, seen: this.hiddenSeen });
+    this.emit({ type: "hide", inside: true, seen: this.hiddenSeen, kind: h.kind });
   }
 
   private leaveHide(): void {
     const p = this.player, h = this.hidden;
     if (!h) return;
+    const kind = h.kind;
     this.hidden = null;
     this.hiddenSeen = false;
     this.hiddenSuspected = false;
+    this.witnesses.clear();
+    this.gaspExposed.clear();
     this.suspicion.clear();
     this.hideThreat = 0;
     this.holdingBreath = false;
-    this.hideCd = 0.6;
+    this.heartMinigame = false;
+    this.heartPhase = 0;
+    this.heartStress = 0;
+    this.heartFeedback = 0;
+    this.rhythmCalm = 0;
+    this.beatHandled = false;
+    this.hideCd = kind === "vent" ? 0.35 : 0.6;
     p.x = h.x; p.z = h.z;
     if (this.prevLight && p.battery > 0 && !p.batteryLocked) p.flashlightOn = true;
-    this.emit({ type: "hide", inside: false, seen: false });
+    this.emit({ type: "hide", inside: false, seen: false, kind });
   }
 
   private get switchAlertCells(): number {
@@ -714,6 +899,9 @@ export class Simulation {
 
   private useSwitch(sw: SwitchState): void {
     this.zoneLit[sw.zone] = SWITCH_LIT;
+    this.zoneFlicker[sw.zone] = 0;
+    this.sectorOutage[sw.zone] = false;
+    this.sectorOutageTimer[sw.zone] = 0;
     // el chasquido del interruptor se oye por el sector segun la dificultad
     const f = this.maze.distanceField([sw.cell]);
     let alerted = 0;
@@ -761,44 +949,145 @@ export class Simulation {
   }
 
   /**
-   * Contener el aliento (mantener Espacio dentro del armario): gasta aliento y reduce la sospecha. Al agotarse se
-   * jadea (un salto de sospecha en los fantasmas cercanos) y no se puede volver a contener hasta recuperar un poco.
+   * Dispara un jadeo audible dentro del escondite: alerta a los fantasmas en un radio de 8 celdas y,
+   * si alguno esta a corta distancia (< 2.1 u) con linea de vision a la puerta, descubre al jugador.
    */
-  private updateBreath(dt: number, stam0: number): void {
+  private triggerHideGasp(rhythmFail: boolean): void {
+    const h = this.hidden;
+    if (!h) return;
+    this.emit({ type: "gasp" });
     const p = this.player;
-    if (this.holdLock && p.stamina >= 30) this.holdLock = false;
-    const want = this.holdInput && !this.holdLock && stam0 > 0;
-    if (want) {
-      p.stamina = Math.max(0, stam0 - HOLD_DRAIN * dt);
-      if (p.stamina <= 0) {
-        this.holdLock = true;
-        this.emit({ type: "gasp" });
-        const h = this.hidden!;
-        // el jadeo se oye: los fantasmas a menos de 8 celdas lo registran y vienen a mirar el armario
-        const pc = this.maze.worldToCell(p.x, p.z);
-        for (const g of this.ghosts) {
-          if (g.lethal && Math.hypot(g.cx - pc[0], g.cy - pc[1]) < 8) { g.lastSeen = [pc[0], pc[1]]; g.lostT = 0; this.hiddenSuspected = true; }
-        }
-        const d0 = this.doorOf(h);
-        for (const g of this.ghosts) {
-          if (g.lethal && Math.hypot(g.x - d0.x, g.z - d0.z) < HIDE_SIGHT * 1.3) this.suspicion.set(g, Math.min(1, (this.suspicion.get(g) ?? 0) + HIDE_GASP));
+    const pc = this.maze.worldToCell(p.x, p.z);
+    for (const g of this.ghosts) {
+      if (g.lethal && Math.hypot(g.cx - pc[0], g.cy - pc[1]) < 8) {
+        g.lastSeen = [pc[0], pc[1]];
+        g.lostT = 0;
+        this.hiddenSuspected = true;
+      }
+    }
+    const d0 = this.doorOf(h);
+    for (const g of this.ghosts) {
+      if (!g.lethal) continue;
+      const dist = Math.hypot(g.x - d0.x, g.z - d0.z);
+      if (dist < HIDE_SIGHT * 1.3) {
+        const nextS = Math.min(1.2, (this.suspicion.get(g) ?? 0) + (rhythmFail ? 0.55 : HIDE_GASP));
+        this.suspicion.set(g, nextS);
+        if (rhythmFail && dist < 2.1 && this.maze.rayClear(g.x, g.z, d0.x, d0.z, 0.4)) {
+          this.gaspExposed.add(g);
+          this.suspicion.set(g, 1.05);
         }
       }
     }
-    this.holdingBreath = want && p.stamina > 0;
   }
 
   /**
-   * Cada fantasma peligroso acumula sospecha sobre el armario mientras ve su puerta de cerca: mas rapido cuanto mas
-   * cerca esta, con luz y sin contener el aliento. Si la sospecha llega a 1 abre la puerta. Tras mirar un rato sin
-   * convencerse se marcha. Los que te vieron o oyeron entrar empiezan con sospecha (0,7 y 0,4).
+   * Minijuego ritmico del corazon y contencion del aliento dentro del escondite:
+   * - Cuando un fantasma peligroso ronda cerca (< 5.2 u), aparece el pulso cardiaco (`heartMinigame = true`).
+   * - Pulsar `Espacio` al ritmo cuando el latido cruza el centro (`0.5 ± heartWindow`) calma el pulso (`rhythmCalm`),
+   *   reduce `heartStress` sin agotar toda la resistencia y frena la sospecha.
+   * - Mantener `Espacio` de forma continua tambien contiene el aliento (gasta resistencia a cambio de calma), pero si
+   *   se agota provoca un jadeo.
+   * - Si un fantasma mira la puerta de cerca y el jugador falla los latidos hasta que `heartStress >= 1`, suelta un
+   *   jadeo (`gasp`) que delata su posicion.
+   */
+  private updateBreath(dt: number, stam0: number, sonarPressed: boolean): void {
+    const p = this.player;
+    const h = this.hidden!;
+    this.heartWindow = this.hideHeartWindow(h.kind);
+    this.rhythmCalm = Math.max(0, this.rhythmCalm - dt);
+    if (this.heartFeedback > 0) this.heartFeedback = Math.max(0, this.heartFeedback - dt * 2.2);
+    else if (this.heartFeedback < 0) this.heartFeedback = Math.min(0, this.heartFeedback + dt * 2.2);
+
+    const door = this.doorOf(h);
+    let minGhostDist = Infinity;
+    let closeWatcher = false;
+    for (const g of this.ghosts) {
+      if (!g.lethal) continue;
+      const d = Math.hypot(g.x - door.x, g.z - door.z);
+      if (d < minGhostDist) minGhostDist = d;
+      if (d < 2.15 && this.maze.rayClear(g.x, g.z, door.x, door.z, 0.4)) {
+        const dirx = (door.x - g.x) / (d || 1), dirz = (door.z - g.z) / (d || 1);
+        const facing = Math.sin(g.yaw) * dirx + Math.cos(g.yaw) * dirz;
+        if (d < 1.4 || facing > 0.34) closeWatcher = true;
+      }
+    }
+
+    this.heartMinigame = minGhostDist < 5.2;
+
+    if (this.holdLock && p.stamina >= 30) this.holdLock = false;
+
+    // Deteccion de pulsacion ritmica de Espacio en el minijuego cardiaco
+    if (this.heartMinigame && sonarPressed && !this.holdLock) {
+      const distFromCenter = Math.abs(this.heartPhase - 0.5);
+      if (distFromCenter <= this.heartWindow) {
+        this.beatHandled = true;
+        this.rhythmCalm = 1.15;
+        this.heartStress = Math.max(0, this.heartStress - 0.35);
+        this.heartFeedback = 1;
+        this.emit({ type: "heartBeat", result: "hit" });
+      } else {
+        this.beatHandled = true;
+        this.heartStress = Math.min(1, this.heartStress + 0.28);
+        this.heartFeedback = -1;
+        this.emit({ type: "heartBeat", result: "miss" });
+      }
+    }
+
+    // Si mantiene Espacio pulsado continuamente (fuera del toque corto ritmico), contiene el aliento clasico
+    const wantHold = this.holdInput && !this.holdLock && stam0 > 0 && !sonarPressed;
+    if (wantHold) {
+      const drain = this.rhythmCalm > 0 ? HOLD_DRAIN * 0.25 : HOLD_DRAIN;
+      p.stamina = Math.max(0, stam0 - drain * dt);
+      if (p.stamina <= 0) {
+        this.holdLock = true;
+        this.triggerHideGasp(closeWatcher);
+      }
+    }
+
+    this.holdingBreath = (wantHold && p.stamina > 0) || this.rhythmCalm > 0;
+
+    if (this.heartMinigame) {
+      const bpm = 1.1 + 0.55 * Math.max(this.hideThreat, Math.max(0, 1 - minGhostDist / 5.2));
+      const prevPhase = this.heartPhase;
+      this.heartPhase = (this.heartPhase + bpm * dt) % 1;
+      if (this.heartPhase < prevPhase) {
+        // Fin de ciclo del latido: si un fantasma mira de cerca y ni acertaste el pulso ni contenias el aliento, sube el estres
+        if (!this.beatHandled && !this.holdingBreath && closeWatcher) {
+          this.heartStress = Math.min(1, this.heartStress + 0.22);
+        }
+        this.beatHandled = false;
+      }
+      if (closeWatcher && !this.holdingBreath) {
+        this.heartStress = Math.min(1, this.heartStress + 0.10 * dt);
+      } else {
+        this.heartStress = Math.max(0, this.heartStress - (this.holdingBreath ? 0.38 : 0.22) * dt);
+      }
+      if (this.heartStress >= 1) {
+        this.heartStress = 0;
+        this.rhythmCalm = 0;
+        this.triggerHideGasp(true);
+      }
+    } else {
+      this.heartPhase = 0;
+      this.heartStress = Math.max(0, this.heartStress - 0.4 * dt);
+      this.beatHandled = false;
+    }
+  }
+
+  /**
+   * Cada fantasma peligroso acumula sospecha sobre el escondite mientras ve su entrada de cerca.
+   * Regla justa: un fantasma SOLO puede abrir el escondite y atraparte (`s >= 1`) si:
+   *  1. Te vio entrar directamente (`this.witnesses.has(g)`), o
+   *  2. Fallaste el ritmo / aliento y soltaste un jadeo audible cerca de el (`this.gaspExposed.has(g)`).
+   * Si no te vio entrar y mantienes la calma sin jadear, la sospecha nunca llega a 1 (se detiene en <= 0.88)
+   * y tras inspeccionar unos segundos el fantasma se marcha.
    */
   private updateSuspicion(dt: number): void {
     const h = this.hidden;
     if (!h) { this.hideThreat = 0; this.holdingBreath = false; return; }
     const door = this.doorOf(h);
     const dark = this.darknessAt(door.x, door.z);
-    const vis = 1 - 0.45 * dark;
+    const vis = (1 - 0.45 * dark) * this.hideCoverFactor(h.kind);
     let threat = 0;
     for (const g of this.ghosts) {
       if (!g.lethal) { this.suspicion.delete(g); this.searchT.delete(g); continue; }
@@ -808,17 +1097,22 @@ export class Simulation {
       const dirx = (door.x - g.x) / (d || 1), dirz = (door.z - g.z) / (d || 1);
       const facing = Math.sin(g.yaw) * dirx + Math.cos(g.yaw) * dirz;
       const sees = los && (d < 1.4 || facing > 0.34);
+      const canCatch = this.witnesses.has(g) || this.gaspExposed.has(g);
       let t = this.searchT.get(g) ?? 0;
       if (t < 0) t = Math.min(0, t + dt); // enfriamiento tras rendirse
       if (sees && t >= 0) {
         const prox = Math.max(0, Math.min(1, (HIDE_SIGHT - d) / (HIDE_SIGHT - 1.0)));
         const checking = g.checkSpot >= 0 && this.hideSpots[g.checkSpot] === h ? 3 : 1;
         s += this.suspicionBase * prox * vis * checking * (this.holdingBreath ? HOLD_FACTOR : 1) * dt;
+        if (!canCatch) {
+          s = Math.min(0.88, s);
+        }
         t += dt;
         if (t >= (checking > 1 ? CHECK_LINGER + 0.5 : this.lingerTime)) {
           // no se convence: se marcha y no vuelve a mirar durante un rato
           t = -6;
           g.reverseQueued = true;
+          if (!canCatch) g.lastSeen = null;
         }
       } else if (!sees) {
         s = Math.max(0, s - HIDE_DECAY * dt);
@@ -826,9 +1120,10 @@ export class Simulation {
       }
       this.searchT.set(g, t);
       s = Math.min(1.2, s);
+      if (!canCatch) s = Math.min(0.88, s);
       this.suspicion.set(g, s);
       threat = Math.max(threat, Math.min(1, s));
-      if (s >= 1) {
+      if (s >= 1 && canCatch) {
         this.state = "caught";
         this.caughtBy = g;
         this.emit({ type: "caught", ghost: g.kind });
@@ -981,5 +1276,345 @@ export class Simulation {
       this.addScore(K.SCORE.levelClear);
       this.emit({ type: "levelComplete" });
     }
+  }
+
+  // ---------------- eventos ambientales dinamicos ----------------
+
+  /** Multiplicador de frecuencia e intensidad de eventos ambientales segun dificultad. */
+  get envScale(): number {
+    switch (this.diff.id) {
+      case "easy": return 0.5;
+      case "normal": return 1.0;
+      case "nightmare": return 1.35;
+      case "oneLife": return 1.55;
+    }
+  }
+
+  private initSteamVents(): void {
+    const { W, H } = this.maze;
+    const candidates: { cell: Cell; wall: Cell }[] = [];
+    for (let y = 1; y < H - 1; y++) {
+      if (y === this.maze.tunnelRow) continue;
+      for (let x = 1; x < W - 1; x++) {
+        if (this.maze.ch(x, y) !== ".") continue;
+        if (Math.hypot(x - this.layout.player[0], y - this.layout.player[1]) < 4) continue;
+        if (Math.hypot(x - this.maze.exit[0], y - this.maze.exit[1]) < 4) continue;
+        if (Math.hypot(x - this.layout.fruit[0], y - this.layout.fruit[1]) < 2) continue;
+        if (this.layout.pellets.some((p) => Math.hypot(p[0] - x, p[1] - y) < 2)) continue;
+        if (this.layout.batteries.some((b) => Math.hypot(b[0] - x, b[1] - y) < 2)) continue;
+        if (this.switches.some((s) => Math.hypot(s.cell[0] - x, s.cell[1] - y) < 2.5)) continue;
+        if (this.hideSpots.some((h) => Math.hypot(h.cell[0] - x, h.cell[1] - y) < 2.5)) continue;
+        const walls: Cell[] = [];
+        for (const [dx, dy] of DIRS) {
+          if (this.maze.ch(x + dx, y + dy) === "#") walls.push([dx, dy]);
+        }
+        if (walls.length > 0 && this.maze.degree(x, y) >= 2) {
+          candidates.push({ cell: [x, y], wall: walls[Math.floor(this.envRng() * walls.length)] });
+        }
+      }
+    }
+    const targetCount = Math.min(6, Math.max(4, Math.floor((W * H) / 70)));
+    this.steamVents = [];
+    while (this.steamVents.length < targetCount && candidates.length > 0) {
+      const idx = Math.floor(this.envRng() * candidates.length);
+      const c = candidates.splice(idx, 1)[0];
+      if (this.steamVents.some((v) => Math.hypot(v.cell[0] - c.cell[0], v.cell[1] - c.cell[1]) < 4.5)) continue;
+      const w = this.maze.cellToWorld(c.cell[0], c.cell[1]);
+      const cd = (14 + this.envRng() * 9) / this.envScale;
+      this.steamVents.push({
+        cell: c.cell,
+        wall: c.wall,
+        x: w.x,
+        z: w.z,
+        state: "idle",
+        timer: (6 + this.steamVents.length * 3.5 + this.envRng() * 4.0) / this.envScale,
+        cooldown: cd,
+      });
+    }
+  }
+
+  private updateSteamVents(dt: number): void {
+    const p = this.player;
+    let inSteam = false;
+    for (let i = 0; i < this.steamVents.length; i++) {
+      const v = this.steamVents[i];
+      v.timer -= dt;
+      if (v.state === "idle" && v.timer <= 0) {
+        v.state = "warning";
+        v.timer = 1.35;
+        this.emit({ type: "steamWarning", index: i, x: v.x, z: v.z });
+      } else if (v.state === "warning" && v.timer <= 0) {
+        v.state = "erupting";
+        v.timer = 3.4 + 0.8 * this.envScale;
+        this.emit({ type: "steamErupt", index: i, x: v.x, z: v.z });
+      } else if (v.state === "erupting" && v.timer <= 0) {
+        v.state = "idle";
+        v.timer = (14 + this.envRng() * 9) / this.envScale;
+      }
+      if (v.state === "erupting" && !this.hidden) {
+        const d = Math.hypot(v.x - p.x, v.z - p.z);
+        if (d < 1.35) inSteam = true;
+      }
+    }
+
+    if (inSteam && !this.hidden) {
+      this.steamExposure = Math.min(1, this.steamExposure + dt * 1.65);
+      p.steamSlow = this.steamExposure >= 0.22;
+      const prevStam = p.stamina;
+      p.stamina = Math.max(0, p.stamina - 18 * this.diff.staminaDrain * dt);
+      if (p.battery > 0) p.battery = Math.max(0, p.battery - 5.5 * this.diff.batteryDrain * dt);
+      if (this.steamExposure > 0.45) p.noise = Math.max(p.noise, 0.72);
+      this.steamHurtCd -= dt;
+      if (this.steamHurtCd <= 0) {
+        this.steamHurtCd = 1.05;
+        this.emit({ type: "steamHurt", x: p.x, z: p.z });
+      }
+      if (prevStam > 0 && p.stamina <= 0 && !p.exhausted) {
+        p.exhausted = true;
+        p.running = false;
+        this.emit({ type: "exhausted" });
+        this.emit({ type: "gasp" });
+        const pc = this.maze.worldToCell(p.x, p.z);
+        for (const g of this.ghosts) {
+          if (g.lethal && Math.hypot(g.cx - pc[0], g.cy - pc[1]) < 8) {
+            g.lastSeen = [pc[0], pc[1]];
+            g.lostT = 0;
+          }
+        }
+      }
+    } else {
+      p.steamSlow = false;
+      this.steamExposure = Math.max(0, this.steamExposure - dt * 0.85);
+      this.steamHurtCd = Math.max(0, this.steamHurtCd - dt);
+    }
+  }
+
+  /** Fuerza una fuga de vapor (para pruebas o eventos dirigidos). */
+  triggerSteamLeak(index?: number, immediate = false): SteamVentState | null {
+    if (!this.steamVents.length) return null;
+    let idx = index ?? -1;
+    if (idx < 0 || idx >= this.steamVents.length) {
+      let bd = Infinity;
+      this.steamVents.forEach((v, i) => {
+        const d = Math.hypot(v.x - this.player.x, v.z - this.player.z);
+        if (d < bd) { bd = d; idx = i; }
+      });
+    }
+    const v = this.steamVents[idx];
+    if (immediate) {
+      v.state = "erupting";
+      v.timer = 4.2 + 0.8 * this.envScale;
+      this.emit({ type: "steamErupt", index: idx, x: v.x, z: v.z });
+    } else {
+      v.state = "warning";
+      v.timer = 1.35;
+      this.emit({ type: "steamWarning", index: idx, x: v.x, z: v.z });
+    }
+    return v;
+  }
+
+  private updateBlackouts(dt: number): void {
+    if (!this.layout.zones.length) return;
+    for (let i = 0; i < this.zoneFlicker.length; i++) {
+      if (this.sectorOutageTimer[i] > 0) {
+        this.sectorOutageTimer[i] = Math.max(0, this.sectorOutageTimer[i] - dt);
+        if (this.sectorOutageTimer[i] <= 0) this.sectorOutage[i] = false;
+      }
+      if (this.zoneFlicker[i] > 0) {
+        this.zoneFlicker[i] = Math.max(0, this.zoneFlicker[i] - dt);
+        if (this.zoneFlicker[i] <= 0) {
+          this.zoneLit[i] = 0;
+          this.sectorOutage[i] = true;
+          this.sectorOutageTimer[i] = 18 + 6 * this.envScale;
+          const sw = this.switches.find((s) => s.zone === i);
+          const zw = sw ? { x: sw.x, z: sw.z } : this.maze.cellToWorld(this.layout.zones[i].cell[0], this.layout.zones[i].cell[1]);
+          this.emit({ type: "zoneBlackout", zone: i, x: zw.x, z: zw.z });
+        }
+      }
+    }
+
+    this.blackoutTimer -= dt;
+    if (this.blackoutTimer <= 0) {
+      this.blackoutTimer = (30 + this.envRng() * 14) / this.envScale;
+      this.triggerZoneBlackout();
+    }
+  }
+
+  /** Inicia un apagon general en la zona indicada (o en la mas relevante para el jugador). */
+  triggerZoneBlackout(zoneIndex?: number, immediate = false): number {
+    if (!this.layout.zones.length) return -1;
+    let z = zoneIndex ?? -1;
+    if (z < 0 || z >= this.layout.zones.length) {
+      // prioriza una zona encendida, o la zona mas cercana al jugador que no este ya en apagon de sector
+      let bestScore = Infinity;
+      for (let i = 0; i < this.layout.zones.length; i++) {
+        const zw = this.maze.cellToWorld(this.layout.zones[i].cell[0], this.layout.zones[i].cell[1]);
+        const d = Math.hypot(zw.x - this.player.x, zw.z - this.player.z);
+        const score = d - (this.zoneLit[i] > 1 ? 40 : 0) + (this.sectorOutage[i] ? 30 : 0);
+        if (score < bestScore) { bestScore = score; z = i; }
+      }
+    }
+    if (z < 0) return -1;
+    const sw = this.switches.find((s) => s.zone === z);
+    const zw = sw ? { x: sw.x, z: sw.z } : this.maze.cellToWorld(this.layout.zones[z].cell[0], this.layout.zones[z].cell[1]);
+    if (immediate) {
+      this.zoneFlicker[z] = 0;
+      this.zoneLit[z] = 0;
+      this.sectorOutage[z] = true;
+      this.sectorOutageTimer[z] = 18 + 6 * this.envScale;
+      this.emit({ type: "zoneBlackout", zone: z, x: zw.x, z: zw.z });
+    } else {
+      this.zoneFlicker[z] = 1.8;
+      this.emit({ type: "zoneFlicker", zone: z, x: zw.x, z: zw.z });
+    }
+    return z;
+  }
+
+  private updateMazeShift(dt: number): void {
+    let dyaw = this.player.viewYaw - this.lastYaw;
+    dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+    this.lastYaw = this.player.viewYaw;
+    if (Math.abs(dyaw) < 0.9) {
+      this.turnAcc = Math.min(Math.PI * 2, this.turnAcc * Math.exp(-dt * 0.45) + Math.abs(dyaw));
+    }
+    this.shiftTimer = Math.max(0, this.shiftTimer - dt);
+
+    if (!this.hidden && this.ghosts.length > 0 && this.shiftTimer <= 0 && this.turnAcc >= 2.45) {
+      if (this.tryMazeShift(false)) {
+        this.turnAcc = 0;
+        this.shiftTimer = (26 + this.envRng() * 14) / this.envScale;
+      } else {
+        this.shiftTimer = 3.5;
+      }
+    }
+  }
+
+  /**
+   * Geometria no euclidiana: intercambia un pasillo y un muro detras del jugador cuando gira 180 grados,
+   * garantizando que el laberinto siga 100 % conexo y todos los nodos sean alcanzables.
+   */
+  tryMazeShift(ignoreViewCone = false): { closed: Cell; opened: Cell } | null {
+    const { W, H } = this.maze;
+    const [px, py] = this.maze.worldToCell(this.player.x, this.player.z);
+    const [vx, vz] = this.player.viewVec();
+
+    const protectedWalk = new Set<number>();
+    const protectedWall = new Set<number>();
+    const markWalk = (x: number, y: number) => { if (this.maze.inBounds(x, y)) protectedWalk.add(y * W + x); };
+    const markWall = (x: number, y: number) => { if (this.maze.inBounds(x, y)) protectedWall.add(y * W + x); };
+
+    // Protege spawn del jugador, salida y su pasillo inmediato
+    markWalk(px, py);
+    markWalk(this.layout.player[0], this.layout.player[1]);
+    markWalk(this.maze.exit[0], this.maze.exit[1]);
+    for (const [dx, dy] of DIRS) {
+      markWalk(this.maze.exit[0] + dx, this.maze.exit[1] + dy);
+      markWall(this.maze.exit[0] + dx, this.maze.exit[1] + dy);
+    }
+
+    // Protege celdas con objetos interactivos, pellets, pilas, fruta y valvulas de vapor
+    for (const pl of this.pellets) markWalk(pl.cell[0], pl.cell[1]);
+    for (const b of this.layout.batteries) markWalk(b[0], b[1]);
+    markWalk(this.layout.fruit[0], this.layout.fruit[1]);
+    for (const s of this.switches) {
+      markWalk(s.cell[0], s.cell[1]);
+      markWall(s.cell[0] + s.wall[0], s.cell[1] + s.wall[1]);
+    }
+    for (const h of this.hideSpots) {
+      markWalk(h.cell[0], h.cell[1]);
+      markWall(h.cell[0] + h.wall[0], h.cell[1] + h.wall[1]);
+    }
+    for (const v of this.steamVents) {
+      markWalk(v.cell[0], v.cell[1]);
+      markWall(v.cell[0] + v.wall[0], v.cell[1] + v.wall[1]);
+    }
+    for (const g of this.ghosts) {
+      markWalk(g.cx, g.cy);
+      markWalk(g.tx, g.ty);
+      markWalk(g.spawn[0], g.spawn[1]);
+      markWalk(g.corner[0], g.corner[1]);
+    }
+
+    const hasNearbyCollider = (cx: number, cy: number): boolean => {
+      const w = this.maze.cellToWorld(cx, cy);
+      const r = K.CELL * 0.65;
+      return this.colliders.some((c) => w.x + r > c.minX && w.x - r < c.maxX && w.z + r > c.minZ && w.z - r < c.maxZ);
+    };
+
+    const closeCandidates: { x: number; y: number; hasDot: boolean }[] = [];
+    for (let y = 1; y < H - 1; y++) {
+      if (y === this.maze.tunnelRow) continue;
+      for (let x = 1; x < W - 1; x++) {
+        if (this.maze.ch(x, y) !== ".") continue;
+        if (protectedWalk.has(y * W + x)) continue;
+        const distP = Math.hypot(x - px, y - py);
+        if (distP < 2.1 || distP > 9.5) continue;
+        if (this.ghosts.some((g) => Math.hypot(g.cx - x, g.cy - y) < 1.8)) continue;
+        if (!ignoreViewCone) {
+          const dot = ((x - px) * vx + (y - py) * vz) / distP;
+          if (dot > -0.3) continue; // debe quedar a espaldas del jugador
+        }
+        if (this.maze.degree(x, y) < 2) continue;
+        if (hasNearbyCollider(x, y)) continue;
+        closeCandidates.push({ x, y, hasDot: this.dotGrid[y * W + x] === 1 });
+      }
+    }
+
+    // Prioriza cerrar celdas cuyo punto ya fue comido
+    closeCandidates.sort((a, b) => Number(a.hasDot) - Number(b.hasDot));
+
+    for (const c of closeCandidates) {
+      // Busca un muro interior cercano detras del jugador que pueda abrirse como pasillo alternativo
+      for (let oy = Math.max(1, c.y - 3); oy <= Math.min(H - 2, c.y + 3); oy++) {
+        if (oy === this.maze.tunnelRow) continue;
+        for (let ox = Math.max(1, c.x - 3); ox <= Math.min(W - 2, c.x + 3); ox++) {
+          if (ox === c.x && oy === c.y) continue;
+          if (this.maze.ch(ox, oy) !== "#") continue;
+          if (protectedWall.has(oy * W + ox)) continue;
+          const distP = Math.hypot(ox - px, oy - py);
+          if (distP < 1.8 || distP > 10.5) continue;
+          if (!ignoreViewCone) {
+            const dot = ((ox - px) * vx + (oy - py) * vz) / distP;
+            if (dot > -0.2) continue;
+          }
+          if (hasNearbyCollider(ox, oy)) continue;
+
+          // Al abrir (ox, oy) y cerrar (c.x, c.y), comprobamos que (ox, oy) conecte al menos 2 celdas transitables
+          this.maze.setCell(c.x, c.y, "#");
+          this.maze.setCell(ox, oy, ".");
+
+          let valid = this.maze.degree(ox, oy) >= 2 && this.maze.degree(this.maze.exit[0], this.maze.exit[1]) === 1;
+          if (valid) {
+            const df = this.maze.distanceField([[px, py]]);
+            for (let ty = 0; ty < H && valid; ty++) {
+              for (let tx = 0; tx < W; tx++) {
+                const ch = this.maze.ch(tx, ty);
+                if (ch === "#" || ch === "S") continue;
+                if (df[ty * W + tx] >= UNREACHABLE || this.maze.degree(tx, ty) < 1) {
+                  valid = false;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (valid) {
+            if (c.hasDot) {
+              this.dotGrid[c.y * W + c.x] = 0;
+              this.dotGrid[oy * W + ox] = 1;
+            }
+            this.shiftCount++;
+            const w = this.maze.cellToWorld(ox, oy);
+            this.emit({ type: "mazeShift", closed: [c.x, c.y], opened: [ox, oy], x: w.x, z: w.z });
+            return { closed: [c.x, c.y], opened: [ox, oy] };
+          }
+
+          // Reversion si no conserva la conectividad perfecta
+          this.maze.setCell(c.x, c.y, ".");
+          this.maze.setCell(ox, oy, "#");
+        }
+      }
+    }
+    return null;
   }
 }

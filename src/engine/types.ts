@@ -47,10 +47,22 @@ export interface HudState {
   camera: "fp" | "tp";
   /** El jugador esta dentro de un escondite (primera persona forzada). */
   hidden: boolean;
-  /** Contiene la respiracion dentro del armario. */
+  /** Tipo de escondite actual ("locker" | "vent" | "table" | null). */
+  hideKind: "locker" | "vent" | "table" | null;
+  /** Contiene la respiracion o mantiene el pulso dentro del escondite. */
   holding: boolean;
-  /** 0..1: sospecha mas alta de un fantasma sobre el armario (solo para el pulso visual, sin cifra). */
+  /** 0..1: sospecha mas alta de un fantasma sobre el escondite (solo para el pulso visual, sin cifra). */
   hideThreat: number;
+  /** True si hay un fantasma peligroso cerca del escondite y el minijuego cardiaco esta activo. */
+  heartMinigame: boolean;
+  /** 0..1: posicion del cursor en la barra de latido (el centro de acierto es 0.5). */
+  heartPhase: number;
+  /** Semiancho de la zona central de acierto (0.15..0.20). */
+  heartWindow: number;
+  /** 0..1: tension cardiaca acumulada por fallar latidos. */
+  heartStress: number;
+  /** -1..1: destello de retroalimentacion tras acertar (>0) o fallar (<0) un latido. */
+  heartFeedback: number;
   /** Retícula de mira: solo en primera persona y fuera del escondite. */
   crosshair: boolean;
   sonar: boolean;

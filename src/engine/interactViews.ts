@@ -70,47 +70,103 @@ export class InteractViews {
       this.lamps.push({ mat: lampMat, zone: sw.zone });
     }
 
-    // armarios: caja hueca (se ve el interior desde dentro) con puerta de listones reales
+    // escondites: armarios metalicos ("locker"), conductos de ventilacion bajos ("vent") y mesas pesadas ("table")
     const tex = lockerTexture();
     const shellMat = new THREE.MeshStandardMaterial({ color: 0x14150f, roughness: 0.8, metalness: 0.35 });
     const outerMat = new THREE.MeshStandardMaterial({ color: 0x23251f, roughness: 0.7, metalness: 0.4 });
     const doorMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.55, metalness: 0.5 });
     const slatMat = new THREE.MeshStandardMaterial({ color: 0x3a3e37, roughness: 0.5, metalness: 0.6 });
     const handleMat = new THREE.MeshStandardMaterial({ color: 0x1a1a17, roughness: 0.4, metalness: 0.7 });
+    const ventFrameMat = new THREE.MeshStandardMaterial({ color: 0x2b302c, roughness: 0.5, metalness: 0.75 });
+    const ventGrilleMat = new THREE.MeshStandardMaterial({ color: 0x464d47, roughness: 0.42, metalness: 0.8 });
+    const tableTopMat = new THREE.MeshStandardMaterial({ color: 0x3a2a1d, roughness: 0.78, metalness: 0.15 });
+    const tableLegMat = new THREE.MeshStandardMaterial({ color: 0x222420, roughness: 0.6, metalness: 0.65 });
+    const tableClothMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.9, metalness: 0.05 });
     const box = (m: THREE.Material, bw: number, bh: number, bd: number, x: number, y: number, z: number): THREE.Mesh => {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), m);
       mesh.position.set(x, y, z);
       return mesh;
     };
     for (const h of sim.hideSpots) {
-      const w = 0.95, d = 0.6, ht = 2.1, t = 0.03;
       const g = new THREE.Group();
-      // paredes del interior (oscuras): atras, laterales, techo y suelo; sin cara frontal
-      g.add(
-        box(shellMat, w, ht, t, 0, ht / 2, -d / 2 + t / 2),
-        box(outerMat, t, ht, d, -w / 2 + t / 2, ht / 2, 0),
-        box(outerMat, t, ht, d, w / 2 - t / 2, ht / 2, 0),
-        box(outerMat, w, t, d, 0, ht - t / 2, 0),
-        box(shellMat, w, t, d, 0, t / 2, 0),
-      );
-      // percha para dar vida al interior
-      g.add(box(handleMat, w - 0.1, 0.02, 0.02, 0, ht - 0.25, -0.05));
-      // puerta: marco macizo arriba y abajo, y una zona de listones a la altura de los ojos
-      const dz = d / 2 + 0.02, dw = w - 0.04;
-      const louverLo = 0.4, louverHi = 1.36;
-      g.add(
-        box(doorMat, dw, louverLo, 0.04, 0, louverLo / 2, dz),
-        box(doorMat, dw, ht - 0.06 - louverHi, 0.04, 0, louverHi + (ht - 0.06 - louverHi) / 2, dz),
-        box(slatMat, 0.05, louverHi - louverLo, 0.04, -dw / 2 + 0.025, (louverLo + louverHi) / 2, dz),
-        box(slatMat, 0.05, louverHi - louverLo, 0.04, dw / 2 - 0.025, (louverLo + louverHi) / 2, dz),
-      );
-      const n = 10, step = (louverHi - louverLo) / n;
-      for (let i = 0; i < n; i++) {
-        const slat = box(slatMat, dw - 0.1, 0.034, 0.015, 0, louverLo + step * (i + 0.5), dz + 0.005);
-        slat.rotation.x = -0.38;
-        g.add(slat);
+      let w = 0.95, d = 0.6;
+
+      if (h.kind === "vent") {
+        // Conducto de ventilacion industrial a ras de suelo (altura de camara 0.34)
+        w = 1.04; d = 0.58;
+        const ht = 0.72, t = 0.035;
+        g.add(
+          box(shellMat, w, ht, t, 0, ht / 2, -d / 2 + t / 2),
+          box(ventFrameMat, t, ht, d, -w / 2 + t / 2, ht / 2, 0),
+          box(ventFrameMat, t, ht, d, w / 2 - t / 2, ht / 2, 0),
+          box(ventFrameMat, w, t, d, 0, ht - t / 2, 0),
+          box(shellMat, w, t, d, 0, t / 2, 0),
+        );
+        const dz = d / 2 + 0.015, dw = w - 0.04;
+        const openLo = 0.11, openHi = 0.59;
+        // Marco metalico remachado del conducto
+        g.add(
+          box(ventFrameMat, dw, openLo, 0.04, 0, openLo / 2, dz),
+          box(ventFrameMat, dw, ht - openHi, 0.04, 0, openHi + (ht - openHi) / 2, dz),
+          box(ventFrameMat, 0.06, openHi - openLo, 0.04, -dw / 2 + 0.03, (openLo + openHi) / 2, dz),
+          box(ventFrameMat, 0.06, openHi - openLo, 0.04, dw / 2 - 0.03, (openLo + openHi) / 2, dz),
+        );
+        const n = 6, step = (openHi - openLo) / n;
+        for (let i = 0; i < n; i++) {
+          const bar = box(ventGrilleMat, dw - 0.12, 0.022, 0.018, 0, openLo + step * (i + 0.5), dz);
+          bar.rotation.x = -0.22;
+          g.add(bar);
+        }
+      } else if (h.kind === "table") {
+        // Mesa pesada pegada al muro: el jugador se agacha debajo (altura de camara 0.48) con vision panoramica
+        w = 1.32; d = 0.74;
+        const ht = 0.96, topT = 0.055, legW = 0.065;
+        // Tablero superior y faldon oscuro
+        g.add(
+          box(tableTopMat, w, topT, d, 0, ht - topT / 2, 0),
+          box(tableClothMat, w - 0.06, 0.22, 0.025, 0, ht - topT - 0.11, d / 2 - 0.03),
+          box(tableClothMat, 0.025, 0.34, d - 0.06, -w / 2 + 0.03, ht - topT - 0.17, 0),
+          box(tableClothMat, 0.025, 0.34, d - 0.06, w / 2 - 0.03, ht - topT - 0.17, 0),
+          box(shellMat, w - 0.08, ht - topT, 0.03, 0, (ht - topT) / 2, -d / 2 + 0.02),
+        );
+        // Cuatro patas metalicas robustas y travesanos laterales bajos
+        const lx = w / 2 - legW / 2 - 0.03, lz = d / 2 - legW / 2 - 0.03;
+        g.add(
+          box(tableLegMat, legW, ht - topT, legW, -lx, (ht - topT) / 2, -lz),
+          box(tableLegMat, legW, ht - topT, legW, lx, (ht - topT) / 2, -lz),
+          box(tableLegMat, legW, ht - topT, legW, -lx, (ht - topT) / 2, lz),
+          box(tableLegMat, legW, ht - topT, legW, lx, (ht - topT) / 2, lz),
+          box(tableLegMat, 0.04, 0.04, d - 0.12, -lx, 0.18, 0),
+          box(tableLegMat, 0.04, 0.04, d - 0.12, lx, 0.18, 0),
+        );
+      } else {
+        // Armario metalico alto ("locker") con puerta de listones reales
+        const ht = 2.1, t = 0.03;
+        g.add(
+          box(shellMat, w, ht, t, 0, ht / 2, -d / 2 + t / 2),
+          box(outerMat, t, ht, d, -w / 2 + t / 2, ht / 2, 0),
+          box(outerMat, t, ht, d, w / 2 - t / 2, ht / 2, 0),
+          box(outerMat, w, t, d, 0, ht - t / 2, 0),
+          box(shellMat, w, t, d, 0, t / 2, 0),
+        );
+        g.add(box(handleMat, w - 0.1, 0.02, 0.02, 0, ht - 0.25, -0.05));
+        const dz = d / 2 + 0.02, dw = w - 0.04;
+        const louverLo = 0.4, louverHi = 1.36;
+        g.add(
+          box(doorMat, dw, louverLo, 0.04, 0, louverLo / 2, dz),
+          box(doorMat, dw, ht - 0.06 - louverHi, 0.04, 0, louverHi + (ht - 0.06 - louverHi) / 2, dz),
+          box(slatMat, 0.05, louverHi - louverLo, 0.04, -dw / 2 + 0.025, (louverLo + louverHi) / 2, dz),
+          box(slatMat, 0.05, louverHi - louverLo, 0.04, dw / 2 - 0.025, (louverLo + louverHi) / 2, dz),
+        );
+        const n = 10, step = (louverHi - louverLo) / n;
+        for (let i = 0; i < n; i++) {
+          const slat = box(slatMat, dw - 0.1, 0.034, 0.015, 0, louverLo + step * (i + 0.5), dz + 0.005);
+          slat.rotation.x = -0.38;
+          g.add(slat);
+        }
+        g.add(box(handleMat, 0.03, 0.2, 0.04, dw / 2 - 0.1, 1.05 - 0.35, dz + 0.04));
       }
-      g.add(box(handleMat, 0.03, 0.2, 0.04, dw / 2 - 0.1, 1.05 - 0.35, dz + 0.04));
+
       const nx = -h.wall[0], nz = -h.wall[1];
       const px = h.x + h.wall[0] * (CELL / 2 - d / 2 - 0.02), pz = h.z + h.wall[1] * (CELL / 2 - d / 2 - 0.02);
       g.position.set(px, 0, pz);

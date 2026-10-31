@@ -323,7 +323,7 @@ export class ScareSystem {
 
   // ------------------- screamers de destello -------------------
 
-  /** Cara fugaz a pantalla completa (susto ambiental). Sin luz blanca: la imagen entra y sale a negro. */
+  /** Cara fugaz a pantalla completa (susto ambiental). Sin luz blanca: la imagen entra y sale a negro con un estallido sonoro fuerte y momentaneo. */
   flashFace(kind: FaceKind, seconds = 0.28, dim = 0): void {
     if (this.level === "off" || this.level === "nofullscreen" || this.deathRunning) return;
     this.flashT = 0;
@@ -331,8 +331,9 @@ export class ScareSystem {
     this.flashKind = kind;
     this.flashSeed = Math.random() * 1000;
     this.flashDim = dim;
-    if (dim <= 0) this.d.audio.playScreamerFlash();
-    this.d.rig.addTrauma(dim > 0 ? 0.15 : 0.5);
+    const strength = (this.level === "reduced" ? 0.65 : 1.0) * (dim > 0 ? 0.88 : 1.15);
+    this.d.audio.playScreamerFlash(strength);
+    this.d.rig.addTrauma(dim > 0 ? 0.32 : 0.62);
     this.resize();
   }
 
