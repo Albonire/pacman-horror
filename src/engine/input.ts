@@ -42,6 +42,15 @@ export class Input {
   private lastClientX: number | null = null;
   private lastClientY: number | null = null;
 
+  // Entrada virtual para dispositivos tactiles / joystick movil
+  touchActive = false;
+  private virtualMove = { forward: 0, strafe: 0 };
+  private virtualAutoSprint = false;
+  private virtualSprint = false;
+  private virtualSonar = false;
+  private virtualLookBack = false;
+  private lastTouchAt = -Infinity;
+
   constructor(el: HTMLElement, cb: InputCallbacks) {
     this.el = el;
     this.cb = cb;
@@ -50,9 +59,17 @@ export class Input {
   attach(): void {
     if (this.attached) return;
     this.attached = true;
+    try {
+      if (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches) {
+        this.touchActive = true;
+      }
+    } catch {
+      // matchMedia error ignored
+    }
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
     window.addEventListener("blur", this.onBlur);
+    window.addEventListener("touchstart", this.onWindowTouch, { passive: true });
     document.addEventListener("mousemove", this.onMouseMove);
     document.addEventListener("pointerlockchange", this.onLockChange);
     document.addEventListener("pointerlockerror", this.onLockErr);
@@ -69,6 +86,7 @@ export class Input {
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
     window.removeEventListener("blur", this.onBlur);
+    window.removeEventListener("touchstart", this.onWindowTouch);
     document.removeEventListener("mousemove", this.onMouseMove);
     document.removeEventListener("pointerlockchange", this.onLockChange);
     document.removeEventListener("pointerlockerror", this.onLockErr);
@@ -80,9 +98,13 @@ export class Input {
     if (document.pointerLockElement === this.el) document.exitPointerLock();
   }
 
+  private onWindowTouch = (): void => {
+    this.markTouch();
+  };
+
   /** Pide el bloqueo del raton (debe llamarse desde un gesto del usuario). */
   requestLock(): void {
-    if (this.mode === "keyboard" || this.locked) return;
+    if (this.mode === "keyboard" || this.locked || this.touchActive) return;
     const el = this.el;
     try {
       if (typeof el.focus === "function") el.focus();
@@ -113,12 +135,73 @@ export class Input {
     if (document.pointerLockElement === this.el) document.exitPointerLock();
   }
 
-  get needsLock(): boolean { return this.mode === "mouse"; }
-  get ready(): boolean { return this.mode === "keyboard" || this.locked; }
+  get needsLock(): boolean { return this.mode === "mouse" && !this.touchActive; }
+  get ready(): boolean { return this.mode === "keyboard" || this.locked || this.touchActive; }
+
+  // ---- API tactil / movil ----
+
+  private markTouch(): void {
+    this.touchActive = true;
+    this.lastTouchAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  }
+
+  setTouchMove(forward: number, strafe: number, autoSprint = false): void {
+    this.markTouch();
+    this.virtualMove.forward = Math.max(-1, Math.min(1, forward));
+    this.virtualMove.strafe = Math.max(-1, Math.min(1, strafe));
+    this.virtualAutoSprint = autoSprint;
+  }
+
+  addTouchLook(dx: number, dy: number): void {
+    this.markTouch();
+    if (!this.capture) return;
+    this.lookDX += Math.max(-220, Math.min(220, dx || 0));
+    this.lookDY += Math.max(-220, Math.min(220, dy || 0));
+  }
+
+  setTouchSprint(active: boolean): void {
+    this.markTouch();
+    this.virtualSprint = active;
+  }
+
+  setTouchSonar(active: boolean): void {
+    this.markTouch();
+    this.virtualSonar = active;
+  }
+
+  setTouchLookBack(active: boolean): void {
+    this.markTouch();
+    this.virtualLookBack = active;
+  }
+
+  triggerBite(): void {
+    this.markTouch();
+    if (this.capture) this.cb.onBite();
+  }
+
+  triggerInteract(): void {
+    this.markTouch();
+    if (this.capture) this.cb.onInteract();
+  }
+
+  triggerLight(): void {
+    this.markTouch();
+    if (this.capture) this.cb.onToggleLight();
+  }
+
+  triggerCamera(): void {
+    this.markTouch();
+    if (this.capture) this.cb.onToggleCamera();
+  }
+
+  triggerPause(): void {
+    this.markTouch();
+    this.cb.onPause();
+  }
 
   // ---- lectura por frame ----
 
-  /** Devuelve y reinicia el movimiento acumulado del raton. */
+  /** Devuelve y reinicia el movimiento acumulado del raton o tactil. */
   consumeLook(): { dx: number; dy: number } {
     const r = { dx: this.lookDX, dy: this.lookDY };
     this.lookDX = 0; this.lookDY = 0;
@@ -130,7 +213,10 @@ export class Input {
   axes(): { forward: number; strafe: number; turn: number; lookV: number } {
     // sin pointer lock se puede girar con el teclado aunque el ajuste sea "raton"
     const kbTurn = this.mode === "keyboard" || (this.mode === "mouse" && !this.locked);
-    let forward = 0, strafe = 0, turn = 0, lookV = 0;
+    let forward = this.virtualMove.forward;
+    let strafe = this.virtualMove.strafe;
+    let turn = 0;
+    let lookV = 0;
     if (this.down("KeyW", "ArrowUp")) forward += 1;
     if (this.down("KeyS", "ArrowDown")) forward -= 1;
     if (this.down("KeyD")) strafe += 1;
@@ -148,19 +234,30 @@ export class Input {
       if (this.down("KeyR")) lookV += 1;
       if (this.down("KeyV")) lookV -= 1;
     }
-    return { forward, strafe: Math.max(-1, Math.min(1, strafe)), turn: Math.max(-1, Math.min(1, turn)), lookV };
+    return {
+      forward: Math.max(-1, Math.min(1, forward)),
+      strafe: Math.max(-1, Math.min(1, strafe)),
+      turn: Math.max(-1, Math.min(1, turn)),
+      lookV,
+    };
   }
 
-  get sprint(): boolean { return this.down("ShiftLeft", "ShiftRight"); }
-  get sonar(): boolean { return this.down("Space") || this.rmb; }
+  get sprint(): boolean { return this.down("ShiftLeft", "ShiftRight") || this.virtualSprint || this.virtualAutoSprint; }
+  get sonar(): boolean { return this.down("Space") || this.rmb || this.virtualSonar; }
   /** Mantener Z para mirar por encima del hombro. */
-  get lookBack(): boolean { return this.down("KeyZ"); }
+  get lookBack(): boolean { return this.down("KeyZ") || this.virtualLookBack; }
 
   clear(): void {
     this.keys.clear();
     this.rmb = false;
     this.lookDX = 0; this.lookDY = 0;
     this.lastClientX = null; this.lastClientY = null;
+    this.virtualMove.forward = 0;
+    this.virtualMove.strafe = 0;
+    this.virtualAutoSprint = false;
+    this.virtualSprint = false;
+    this.virtualSonar = false;
+    this.virtualLookBack = false;
   }
 
   // ---- manejadores ----
@@ -197,6 +294,7 @@ export class Input {
 
   private onMouseMove = (e: MouseEvent): void => {
     if (!this.capture || this.mode === "keyboard") return;
+    if (performance.now() - this.lastTouchAt < 500) return;
     if (this.locked) {
       // Chrome entrega un salto enorme en el primer evento tras capturar el raton: se ignora un instante
       if (performance.now() < this.ignoreLookUntil) return;
@@ -227,6 +325,7 @@ export class Input {
 
   private onMouseDown = (e: MouseEvent): void => {
     if (!this.capture) return;
+    if (performance.now() - this.lastTouchAt < 500) return;
     if (e.button === 2) { this.rmb = true; e.preventDefault(); }
     if (e.button === 0) {
       if (this.mode === "mouse" && !this.locked) {

@@ -1,6 +1,6 @@
 {
-  "summary":  "Plan de implementacion para Audio Posicional 3D HRTF con Oclusion para Fantasmas, Susurros Sinteticos Procedurales Espacializados y Efectos de Agotamiento Fisico (Desenfoque Radial, Vision de Tunel y Respiracion en Mandibula) en PAC-MAN UMBRAL.",
-  "updatedAt":  "2026-10-31T03:36:18.387448082Z",
+  "summary":  "Plan de implementacion para corregir el corte de audio en Brave/Chromium movil, redisenar el sonar cuadrado con bordes difuminados para ver las 4 esquinas, implementar vibracion hibrida (Web Vibration desbloqueada en gesto + resonancia sub-grave tactil + sacudida visual) y reescribir la logica tactil con joystick ~10% mas grande y grilla 2x2 limpia sin conflictos de eventos.",
+  "updatedAt":  "2026-10-31T22:14:47.358965829Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

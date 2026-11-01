@@ -184,11 +184,18 @@ export function deathScream(S: Synth, kind: FaceKind, gain = 1): void {
       env.gain.setValueAtTime(v, o.at + o.holdTo);
       env.gain.exponentialRampToValueAtTime(0.0001, o.at + o.fadeTo);
       src.connect(hp); hp.connect(eq); eq.connect(lp); lp.connect(env);
+      let panNode: StereoPannerNode | null = null;
+      let sendGain: GainNode | null = null;
       if (o.pan !== undefined && typeof S.ctx.createStereoPanner === "function") {
-        const pn = S.ctx.createStereoPanner(); pn.pan.value = o.pan; env.connect(pn); S.out(pn, S.voice, o.send);
-      } else S.out(env, S.voice, o.send);
+        panNode = S.ctx.createStereoPanner(); panNode.pan.value = o.pan; env.connect(panNode); sendGain = S.out(panNode, S.voice, o.send);
+      } else sendGain = S.out(env, S.voice, o.send);
       src.start(o.at);
       src.stop(o.at + o.fadeTo + 0.05);
+      src.onended = () => {
+        for (const n of [src, hp, eq, lp, env, panNode, sendGain]) {
+          try { n?.disconnect(); } catch { /* noop */ }
+        }
+      };
     };
     // principal: la muestra entera, con su cola natural
     layer({ at: hit, rate: base, vol: 0.6, hp: 85, lp: 9500, send: 0.14, holdTo: buf.duration / base - 0.5, fadeTo: buf.duration / base + 0.05 });
@@ -214,11 +221,26 @@ export function deathScream(S: Synth, kind: FaceKind, gain = 1): void {
   beats.forEach((d, i) => S.tone({ f0: 54 - i * 3, f1: 30, t: tTail + d, dur: 0.22 + i * 0.03, vol: (0.62 - i * 0.1) * g, lp: 170, a: 0.01 }));
 }
 
+/** Ayudante interno: crea un PannerNode temporal y lo desconecta tras `dur` segundos para evitar fugas de nodos. */
+function tempPanner(S: Synth, x: number, y: number, z: number, ref: number, rolloff: number, dest: AudioNode, sendVal: number, dur: number): PannerNode {
+  const p = S.panner(x, y, z, ref, rolloff);
+  p.connect(dest);
+  const send = S.ctx.createGain();
+  send.gain.value = sendVal;
+  p.connect(send);
+  send.connect(S.reverbSend);
+  if (typeof window !== "undefined") {
+    window.setTimeout(() => {
+      try { p.disconnect(); } catch { /* noop */ }
+      try { send.disconnect(); } catch { /* noop */ }
+    }, (dur + 0.35) * 1000);
+  }
+  return p;
+}
+
 /** Pulso grave y calido que viene de la salida abierta (espacializado: indica la direccion). */
 export function beacon(S: Synth, x: number, y: number, z: number): void {
-  const p = S.panner(x, y, z, 3, 0.55);
-  p.connect(S.sfx);
-  const send = S.ctx.createGain(); send.gain.value = 0.5; p.connect(send); send.connect(S.reverbSend);
+  const p = tempPanner(S, x, y, z, 3, 0.55, S.sfx, 0.5, 1.8);
   S.tone({ f0: 98, f1: 90, dur: 1.7, vol: 0.55, a: 0.2, lp: 700, dest: p });
   S.tone({ f0: 147, f1: 140, dur: 1.4, vol: 0.28, a: 0.28, lp: 800, t: S.now + 0.12, dest: p });
   S.tone({ f0: 196, dur: 1.1, vol: 0.12, a: 0.3, lp: 900, t: S.now + 0.3, dest: p });
@@ -269,9 +291,7 @@ export function stinger(S: Synth, strength: number): void {
 }
 
 export function bang(S: Synth, x: number, y: number, z: number): void {
-  const p = S.panner(x, y, z, 2, 1.0);
-  p.connect(S.sfx);
-  const send = S.ctx.createGain(); send.gain.value = 0.5; p.connect(send); send.connect(S.reverbSend);
+  const p = tempPanner(S, x, y, z, 2, 1.0, S.sfx, 0.5, 1.4);
   S.noise({ kind: "brown", lp: 700, dur: 0.4, vol: 1.0, a: 0.002, dest: p });
   S.tone({ f0: 130, f1: 40, dur: 0.35, vol: 0.9, a: 0.002, dest: p });
   S.tone({ f0: 840, dur: 1.3, vol: 0.05, dest: p });
@@ -279,9 +299,7 @@ export function bang(S: Synth, x: number, y: number, z: number): void {
 }
 
 export function whisper(S: Synth, x: number, y: number, z: number): void {
-  const p = S.panner(x, y, z, 1.4, 1.0);
-  p.connect(S.voice);
-  const send = S.ctx.createGain(); send.gain.value = 0.7; p.connect(send); send.connect(S.reverbSend);
+  const p = tempPanner(S, x, y, z, 1.4, 1.0, S.voice, 0.7, 2.0);
   const n = 5 + Math.floor(rnd() * 3);
   let t = S.now;
   for (let i = 0; i < n; i++) {
@@ -294,9 +312,7 @@ export function whisper(S: Synth, x: number, y: number, z: number): void {
 }
 
 export function footsteps(S: Synth, x: number, y: number, z: number): void {
-  const p = S.panner(x, y, z, 1.8, 1.1);
-  p.connect(S.sfx);
-  const send = S.ctx.createGain(); send.gain.value = 0.35; p.connect(send); send.connect(S.reverbSend);
+  const p = tempPanner(S, x, y, z, 1.8, 1.1, S.sfx, 0.35, 3.0);
   for (let i = 0; i < 6; i++) {
     const t = S.now + i * 0.46 + rnd() * 0.03;
     S.noise({ kind: "brown", lp: 300, dur: 0.11, vol: 0.7, t, dest: p });
@@ -319,7 +335,7 @@ export function blackout(S: Synth, on: boolean): void {
 /**
  * Estallido sonoro de screamer fugaz (fuerte pero momentaneo, ~0,32 s):
  * 1) Ducking instantaneo del ambiente para maximo contraste dinamico.
- * 2) Golpe seco de pecho (sub-grave 128->22 Hz + transitorio explosivo de ruido y metal).
+ * 2) Golpe seco de pecho y resonancia sub-grave tactil (38-58 Hz + 95-145 Hz para hacer vibrar el chasis del movil).
  * 3) Rafaga de chillido desgarrado en el bus de voz (corte de muestra de grito + formantes distorsionados)
  *    que golpea al instante y se corta en seco en cuanto desaparece la cara.
  */
@@ -330,10 +346,12 @@ export function screamerFlash(S: Synth, strength = 1): void {
   // Silencia de golpe el fondo durante 0,45 s para que el impacto sobresalte de verdad y vuelva enseguida
   S.duck(0.04, 0.45, 0.35);
 
-  // 1) Impacto fisico en el pecho (ataque de 1 ms, caida sub-grave y latigazo de aire/metal)
-  S.tone({ f0: 135, f1: 18, t: t0, dur: 0.36, vol: 1.0 * s, a: 0.001, dest: S.voice });
+  // 1) Impacto fisico en el pecho + ráfaga sub-grave tactil (hace vibrar fisicamente el altavoz/chasis en moviles como Brave)
+  S.tone({ f0: 145, f1: 24, t: t0, dur: 0.36, vol: 1.0 * s, a: 0.001, dest: S.voice });
   S.tone({ type: "triangle", f0: 280, f1: 38, t: t0, dur: 0.26, vol: 0.95 * s, a: 0.001, dest: S.voice });
-  S.tone({ f0: 62, f1: 28, t: t0, dur: 0.42, vol: 0.88 * s, a: 0.001, lp: 160, dest: S.voice });
+  // Doble pulso sub-grave de resonancia mecanica (52 Hz y 104 Hz en fase) sincronizado con la rafaga haptica
+  S.tone({ type: "sine", f0: 54, f1: 36, t: t0, dur: 0.14, vol: 1.0 * s, a: 0.001, dest: S.voice });
+  S.tone({ type: "triangle", f0: 108, f1: 68, t: t0 + 0.13, dur: 0.18, vol: 0.95 * s, a: 0.001, dest: S.voice });
   S.noise({ kind: "white", hp: 680, t: t0, dur: 0.26, vol: 1.0 * s, a: 0.001, dest: S.voice, send: 0.22 });
   S.noise({ kind: "pink", bp: 2950, bp1: 1350, q: 2.8, t: t0, dur: 0.28, vol: 0.88 * s, a: 0.001, dest: S.voice, send: 0.25 });
 
@@ -357,9 +375,14 @@ export function screamerFlash(S: Synth, strength = 1): void {
     env.gain.setValueAtTime(v, t0 + 0.19);
     env.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.31);
     src.connect(hp); hp.connect(eq); eq.connect(env);
-    S.out(env, S.voice, 0.2);
+    const sendGain = S.out(env, S.voice, 0.2);
     src.start(t0, 0.06);
     src.stop(t0 + 0.33);
+    src.onended = () => {
+      for (const n of [src, hp, eq, env, sendGain]) {
+        try { n?.disconnect(); } catch { /* noop */ }
+      }
+    };
   }
 
   // 3) Chillido sintetico por formantes distorsionados + cluster disonante agudo (ataque instantaneo, corte rapido)
@@ -441,9 +464,7 @@ export function hide(S: Synth, inside: boolean): void {
 
 /** Aviso de tuberia a punto de reventar: traqueteo metalico y silbido creciente espacializado. */
 export function steamWarning(S: Synth, x: number, y: number, z: number): void {
-  const p = S.panner(x, y, z, 2.2, 0.9);
-  p.connect(S.sfx);
-  const send = S.ctx.createGain(); send.gain.value = 0.35; p.connect(send); send.connect(S.reverbSend);
+  const p = tempPanner(S, x, y, z, 2.2, 0.9, S.sfx, 0.35, 1.3);
   S.tone({ type: "triangle", f0: 620, f1: 1850, dur: 1.15, vol: 0.14, a: 0.15, lp: 3200, dest: p });
   S.noise({ bp: 2400, bp1: 4200, q: 4.5, dur: 1.2, vol: 0.32, a: 0.2, dest: p });
   for (let i = 0; i < 3; i++) {
@@ -453,9 +474,7 @@ export function steamWarning(S: Synth, x: number, y: number, z: number): void {
 
 /** Estallido de vapor a presion en un pasillo (espacializado). */
 export function steamBurst(S: Synth, x: number, y: number, z: number): void {
-  const p = S.panner(x, y, z, 2.6, 0.85);
-  p.connect(S.sfx);
-  const send = S.ctx.createGain(); send.gain.value = 0.45; p.connect(send); send.connect(S.reverbSend);
+  const p = tempPanner(S, x, y, z, 2.6, 0.85, S.sfx, 0.45, 2.7);
   // Golpe metalico inicial de la valvula + chorro denso de vapor
   S.tone({ f0: 145, f1: 42, dur: 0.28, vol: 0.75, a: 0.003, dest: p });
   S.noise({ kind: "white", bp: 1800, bp1: 1100, q: 1.4, dur: 2.6, vol: 0.65, a: 0.02, dest: p });
@@ -471,9 +490,7 @@ export function steamCough(S: Synth): void {
 
 /** Disparo de disyuntor / apagon general de sector desde la caja de fusibles (espacializado). */
 export function breakerTrip(S: Synth, x: number, y: number, z: number): void {
-  const p = S.panner(x, y, z, 3.0, 0.7);
-  p.connect(S.sfx);
-  const send = S.ctx.createGain(); send.gain.value = 0.55; p.connect(send); send.connect(S.reverbSend);
+  const p = tempPanner(S, x, y, z, 3.0, 0.7, S.sfx, 0.55, 1.3);
   // Chispa electrica + golpe seco de palanca + caida grave de transformador
   S.noise({ hp: 2400, dur: 0.16, vol: 0.55, a: 0.002, dest: p });
   S.tone({ type: "sawtooth", f0: 140, f1: 48, dur: 0.24, vol: 0.65, lp: 900, dest: p });
@@ -483,9 +500,7 @@ export function breakerTrip(S: Synth, x: number, y: number, z: number): void {
 
 /** Roce sordo de muros de hormigon/piedra al cambiar un pasillo a espaldas del jugador. */
 export function mazeShift(S: Synth, x: number, y: number, z: number): void {
-  const p = S.panner(x, y, z, 2.5, 0.8);
-  p.connect(S.sfx);
-  const send = S.ctx.createGain(); send.gain.value = 0.6; p.connect(send); send.connect(S.reverbSend);
+  const p = tempPanner(S, x, y, z, 2.5, 0.8, S.sfx, 0.6, 1.2);
   S.noise({ kind: "brown", lp: 240, dur: 1.1, vol: 0.75, a: 0.08, dest: p });
   S.tone({ type: "triangle", f0: 62, f1: 31, dur: 1.05, vol: 0.65, a: 0.06, lp: 180, dest: p });
   S.noise({ kind: "pink", bp: 340, bp1: 180, q: 3.0, dur: 0.85, vol: 0.35, a: 0.1, dest: p });

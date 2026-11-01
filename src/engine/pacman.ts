@@ -265,11 +265,13 @@ export class PovJaws {
   private layout(): void {
     const dist = 0.75;
     const halfH = dist * Math.tan((this.camera.fov * Math.PI) / 360);
-    const halfW = halfH * this.aspect;
+    const effAspect = Math.max(1.08, this.aspect);
+    const halfW = halfH * effAspect;
     const w = halfW * 1.4;
     const ry = 0.16, rz = 0.2;
-    // borde superior del labio inferior (fraccion de la mitad de la pantalla); abierta=0.67 -> ~ -0.80
-    const topY = halfH * (-0.02 - 1.16 * this.open);
+    // En pantallas verticales bajamos ligeramente el labio inferior para despejar la zona de controles tactiles
+    const portraitDrop = this.aspect < 1 ? (1 - Math.max(0.45, this.aspect)) * 0.18 : 0;
+    const topY = halfH * (-0.02 - 1.16 * this.open - portraitDrop);
     this.lowerLip.scale.set(w, ry, rz);
     const gl = this.lowerLip.userData.gum as THREE.Mesh;
     gl.scale.set(w * 0.992, ry * 0.9, rz * 0.9);

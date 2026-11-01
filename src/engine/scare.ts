@@ -7,6 +7,7 @@ import { FACE_COLORS, type FaceKind } from "../gfx/faces";
 import { hash2 } from "../gfx/noise";
 import type { FxState } from "./postfx";
 import type { GhostView } from "./ghostView";
+import { triggerCaughtHaptics, triggerScreamerHaptics } from "./haptics";
 import type { CameraRig } from "./rig";
 import { preloadScreamImages, screamImage } from "./screamImages";
 import type { ScareLevel } from "./settings";
@@ -209,6 +210,7 @@ export class ScareSystem {
             : 1.0;
     this.d.audio.duck?.(0.01, 4.5); // el ambiente y la musica callan durante todo el grito
     this.d.audio.playDeathScream(kind, gain);
+    triggerCaughtHaptics(this.level);
     this.d.rig.override = { pos: this.eye.clone(), target: this.startTarget.clone(), fov: 78, roll: 0 };
     this.resize();
   }
@@ -273,7 +275,11 @@ export class ScareSystem {
     if (show && t >= 0.38 && t < len) {
       if (cut !== this.lastCut || this.frameSeed === 0) { this.frameSeed = Math.floor(Math.random() * 1e6); }
       this.lastCut = cut;
-      if (t >= 0.38 && !this.hitDone) { this.hitDone = true; this.d.audio.playScareHit(1.2); }
+      if (t >= 0.38 && !this.hitDone) {
+        this.hitDone = true;
+        this.d.audio.playScareHit(1.2);
+        triggerScreamerHaptics(1.2, this.level);
+      }
       // zoom: golpe seco al entrar (1.0) y acercamiento lento hacia la cara
       const zoom = 1.0 + smooth(0.38, 0.6, t) * 0.12 + smooth(0.6, len * 0.85, t) * 0.55;
       const violence = (this.level === "reduced" ? 0.35 : 1) * (0.25 + 0.75 * calm);
@@ -333,6 +339,7 @@ export class ScareSystem {
     this.flashDim = dim;
     const strength = (this.level === "reduced" ? 0.65 : 1.0) * (dim > 0 ? 0.88 : 1.15);
     this.d.audio.playScreamerFlash(strength);
+    triggerScreamerHaptics(strength, this.level);
     this.d.rig.addTrauma(dim > 0 ? 0.32 : 0.62);
     this.resize();
   }

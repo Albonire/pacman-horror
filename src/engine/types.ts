@@ -71,6 +71,8 @@ export interface HudState {
   exitDir: number | null;
   fruitName: string | null;
   muted: boolean;
+  /** Accion contextual al alcance ("hide" | "switch" | "leave" | null) para iluminar el boton tactil. */
+  interactHint?: "hide" | "switch" | "leave" | null;
 }
 
 /** Superficie que el motor usa para hablar con la interfaz (implementada por React). */

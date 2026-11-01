@@ -278,5 +278,29 @@ describe("Audio Posicional 3D HRTF, Susurros Sinteticos y Esfuerzo Fisico", () =
     expect(pal.base).toBe("rgb(125,11,14)");
     expect(pal.wet).toBe("rgb(177,11,14)");
   });
+
+  it("libera todos los nodos WebAudio en onended (tone, noise y formantVoice) evitando fugas en Chromium movil", () => {
+    const { ctx, createdOscs } = makeMockAudioContext();
+    const S = new Synth(ctx);
+    expect(S.live).toBe(0);
+
+    const oscsBefore = createdOscs.length;
+    S.tone({ f0: 220, dur: 0.2, gain: 0.1 });
+    S.formantVoice({
+      f0: 140,
+      dur: 0.3,
+      gain: 0.12,
+      distort: true,
+      formants: [[500, 6, 1], [1200, 8, 0.8], [2400, 10, 0.5]],
+    });
+    expect(S.live).toBe(2);
+
+    // Simular finalizacion de los osciladores disparando sus callbacks onended
+    for (let i = oscsBefore; i < createdOscs.length; i++) {
+      const o = createdOscs[i] as unknown as { onended?: () => void };
+      o.onended?.();
+    }
+    expect(S.live).toBe(0);
+  });
 });
 

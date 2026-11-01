@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CAMPAIGN } from "./config/campaign";
 import type { DifficultyId } from "./config/difficulty";
 import { Game } from "./engine/game";
+import { unlockHaptics } from "./engine/haptics";
 import { loadProgress, loadSettings, saveProgress, saveSettings, type Progress, type Settings } from "./engine/settings";
 import type { Phase, RunSummary } from "./engine/types";
 import { HudController } from "./ui/hudController";
@@ -17,6 +18,26 @@ const EMPTY_SUMMARY: RunSummary = {
   difficulty: "normal", levelIndex: 0, levelName: "", score: 0, highScore: 0, newHighScore: false, lives: 0,
   timeSeconds: 0, ghostsEaten: 0, deaths: 0, dotsEaten: 0, totalDots: 0, isFinalLevel: false, caughtBy: null,
 };
+
+const ESC_HOLD_MS = 1500;
+const ESC_SHOW_DELAY_MS = 160;
+
+type NavWithKeyboard = Navigator & {
+  keyboard?: {
+    lock?: (keys: string[]) => Promise<void>;
+    unlock?: () => void;
+  };
+};
+
+function lockEscapeKey(): void {
+  const kb = (navigator as unknown as NavWithKeyboard).keyboard;
+  void kb?.lock?.(["Escape"]).catch(() => { /* navegador sin soporte de Keyboard Lock */ });
+}
+
+function unlockEscapeKey(): void {
+  const kb = (navigator as unknown as NavWithKeyboard).keyboard;
+  try { kb?.unlock?.(); } catch { /* ignorar */ }
+}
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -34,6 +55,51 @@ export default function App() {
   const [summary, setSummary] = useState<RunSummary>(EMPTY_SUMMARY);
   const [briefLevel, setBriefLevel] = useState(0);
   const [outroDone, setOutroDone] = useState(false);
+  const [escHold, setEscHold] = useState(0);
+  const [fsNotice, setFsNotice] = useState<string | null>(null);
+
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const manualFsExit = useRef(false);
+  const escHoldRaf = useRef<number | null>(null);
+  const escDownAt = useRef<number | null>(null);
+  const fsNoticeTimer = useRef<number | null>(null);
+
+  const showFsNotice = useCallback((msg: string) => {
+    setFsNotice(msg);
+    if (fsNoticeTimer.current !== null) window.clearTimeout(fsNoticeTimer.current);
+    fsNoticeTimer.current = window.setTimeout(() => setFsNotice(null), 1800);
+  }, []);
+
+  const enterFullscreen = useCallback(() => {
+    const el = document.documentElement;
+    if (document.fullscreenElement || typeof el.requestFullscreen !== "function") {
+      lockEscapeKey();
+      return;
+    }
+    void el.requestFullscreen({ navigationUI: "hide" }).then(() => {
+      lockEscapeKey();
+    }).catch(() => { /* el navegador o iframe lo rechazo: se sigue en ventana */ });
+  }, []);
+
+  const exitFullscreenExplicit = useCallback(() => {
+    manualFsExit.current = true;
+    unlockEscapeKey();
+    if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+      void document.exitFullscreen().catch(() => { /* ignorar */ });
+    }
+    showFsNotice("PANTALLA COMPLETA DESACTIVADA · F11 PARA ALTERNAR");
+  }, [showFsNotice]);
+
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      exitFullscreenExplicit();
+    } else {
+      manualFsExit.current = false;
+      enterFullscreen();
+      showFsNotice("PANTALLA COMPLETA ACTIVADA · MANTÉN ESC 1,5 S O F11 PARA SALIR");
+    }
+  }, [enterFullscreen, exitFullscreenExplicit, showFsNotice]);
 
   // ---- ciclo de vida del motor ----
   useEffect(() => {
@@ -70,45 +136,109 @@ export default function App() {
     };
   }, []);
 
-  // ---- teclas de menu ----
+  const uiStateRef = useRef({ phase, menuView, pauseSettings });
+  uiStateRef.current = { phase, menuView, pauseSettings };
+
+  // ---- teclas de menu, F11 y mantener Esc 1.5s para salir de pantalla completa ----
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.code !== "Escape") return;
-      if (phase === "menu" && menuView !== "main") setMenuView("main");
-      else if (phase === "paused" && pauseSettings) setPauseSettings(false);
+    const stopEscHold = () => {
+      if (escHoldRaf.current !== null) {
+        cancelAnimationFrame(escHoldRaf.current);
+        escHoldRaf.current = null;
+      }
+      escDownAt.current = null;
+      setEscHold(0);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [phase, menuView, pauseSettings]);
+
+    const tickEscHold = (now: number) => {
+      if (escDownAt.current === null) return;
+      const elapsed = now - escDownAt.current;
+      if (elapsed >= ESC_HOLD_MS) {
+        stopEscHold();
+        exitFullscreenExplicit();
+        return;
+      }
+      if (elapsed >= ESC_SHOW_DELAY_MS) {
+        const pct = Math.min(1, (elapsed - ESC_SHOW_DELAY_MS) / (ESC_HOLD_MS - ESC_SHOW_DELAY_MS));
+        setEscHold(pct);
+      }
+      escHoldRaf.current = requestAnimationFrame(tickEscHold);
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "F11") {
+        e.preventDefault();
+        toggleFullscreen();
+        return;
+      }
+      if (e.code !== "Escape") return;
+      if (!e.repeat) {
+        const st = uiStateRef.current;
+        if (st.phase === "menu" && st.menuView !== "main") setMenuView("main");
+        else if (st.phase === "paused" && st.pauseSettings) setPauseSettings(false);
+        if (escDownAt.current === null) {
+          escDownAt.current = performance.now();
+          escHoldRaf.current = requestAnimationFrame(tickEscHold);
+        }
+      }
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Escape") stopEscHold();
+    };
+
+    const onFsChange = () => {
+      if (document.fullscreenElement) {
+        lockEscapeKey();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", stopEscHold);
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => {
+      stopEscHold();
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", stopEscHold);
+      document.removeEventListener("fullscreenchange", onFsChange);
+    };
+  }, [exitFullscreenExplicit, toggleFullscreen]);
 
   // ---- acciones ----
   const game = () => gameRef.current;
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
-  const fsAsked = useRef(false);
-  /** Primer clic o toque dentro del juego: audio y, una sola vez, pantalla completa. */
+
+  /** Al primer toque o clic: activa audio, vibracion haptica y pantalla completa persistente. */
   const ensureAudio = useCallback(() => {
+    unlockHaptics();
     gameRef.current?.audio.resume();
-    if (fsAsked.current || !settingsRef.current.fullscreen) return;
-    fsAsked.current = true;
-    const el = document.documentElement;
-    if (document.fullscreenElement || typeof el.requestFullscreen !== "function") return;
-    void el.requestFullscreen({ navigationUI: "hide" }).then(() => {
-      // con el bloqueo de teclado Esc pausa el juego sin sacarte de pantalla completa (Chrome y Edge)
-      const kb = (navigator as unknown as { keyboard?: { lock?: (keys: string[]) => Promise<void> } }).keyboard;
-      void kb?.lock?.(["Escape"]).catch(() => { /* no disponible */ });
-    }).catch(() => { /* el navegador lo rechazo: se sigue en ventana */ });
-  }, []);
+    if (!settingsRef.current.fullscreen || manualFsExit.current) return;
+    if (!document.fullscreenElement) {
+      enterFullscreen();
+    } else {
+      lockEscapeKey();
+    }
+  }, [enterFullscreen]);
+
   const changeSettings = useCallback((s: Settings) => {
+    const prevFs = settingsRef.current.fullscreen;
     setSettings(s);
     saveSettings(s);
     gameRef.current?.applySettings(s);
-  }, []);
+    if (s.fullscreen && !prevFs) {
+      manualFsExit.current = false;
+      enterFullscreen();
+    } else if (!s.fullscreen && prevFs && document.fullscreenElement) {
+      exitFullscreenExplicit();
+    }
+  }, [enterFullscreen, exitFullscreenExplicit]);
 
   const acceptWarning = (reduced: boolean) => {
+    unlockHaptics();
     const p = { ...progress, warningAccepted: true };
     setProgress(p); saveProgress(p);
-    if (gameRef.current) gameRef.current.progress = p; // el motor guarda su copia al terminar niveles
+    if (gameRef.current) gameRef.current.progress = p;
     if (reduced) changeSettings({ ...settings, scares: "reduced" });
     gameRef.current?.audio.resume();
   };
@@ -121,13 +251,29 @@ export default function App() {
   const backToMenu = () => { setPauseSettings(false); setMenuView("main"); void game()?.quitToMenu(); };
 
   const warningNeeded = phase === "menu" && !progress.warningAccepted;
+  const getInput = useCallback(() => gameRef.current?.input ?? null, []);
+  const showBanner = escHold > 0.01 || fsNotice !== null;
 
   return (
-    <div className="fixed inset-0 bg-black overflow-hidden select-none font-crt" onPointerDown={ensureAudio}>
+    <div className="app-root font-crt" onPointerDownCapture={ensureAudio} onTouchStartCapture={ensureAudio}>
       <div ref={containerRef} className="absolute inset-0" />
       <canvas ref={scareRef} className="scare-canvas" />
-      <HudView ref={hudRef} radarRef={radarRef} />
+      <HudView ref={hudRef} radarRef={radarRef} getInput={getInput} />
       <div className="crt-lines" />
+
+      {/* Indicador sutil al mantener Esc para salir de pantalla completa */}
+      <div
+        className="fs-hold-indicator"
+        data-active={showBanner ? "1" : "0"}
+        aria-hidden={!showBanner}
+      >
+        <div className="fs-hold-label">
+          {escHold > 0.01 ? "MANTÉN ESC PARA SALIR DE PANTALLA COMPLETA · O PULSA F11" : fsNotice}
+        </div>
+        <div className="fs-hold-track" style={{ opacity: escHold > 0.01 ? 1 : 0 }}>
+          <div className="fs-hold-fill" style={{ width: `${Math.round(escHold * 100)}%` }} />
+        </div>
+      </div>
 
       {phase === "loading" && <LoadingScreen />}
 
@@ -184,4 +330,3 @@ export default function App() {
     </div>
   );
 }
-

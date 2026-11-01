@@ -13,6 +13,8 @@ export interface LayoutSpec {
   seed: number;
   loopChance: number; // prob. de abrir muros entre pasillos paralelos
   braid: number; // prob. de eliminar cada callejon sin salida
+  /** Cantidad objetivo de escondites en el nivel (por defecto proporcional al area). */
+  hideSpots?: number;
 }
 
 export type HideSpotKind = "locker" | "vent" | "table";
@@ -259,18 +261,43 @@ function build(spec: LayoutSpec, seed: number): LevelLayout | null {
   }
   const hideSpots: { cell: Cell; wall: Cell; kind: HideSpotKind }[] = [];
   const hideKinds: HideSpotKind[] = ["locker", "vent", "table"];
-  const hideCount = Math.max(3, Math.round(open2.length / 38));
-  for (const c of shuffle(rng, freeCells())) {
-    if (hideSpots.length >= hideCount) break;
-    if (eu(c, player) < 3.5 || hideSpots.some((h) => eu(h.cell, c) < 5)) continue;
+  const hideCount = spec.hideSpots ?? Math.max(4, Math.round(open2.length / 32));
+  const straightWall = (c: Cell): Cell | null => {
     const wN = !g[c[1] - 1]?.[c[0]], wS = !g[c[1] + 1]?.[c[0]], wW = !g[c[1]]?.[c[0] - 1], wE = !g[c[1]]?.[c[0] + 1];
-    // pasillo recto de dos paredes opuestas: el escondite va en una de ellas
-    let wall: Cell | null = null;
-    if (wN && wS && !wW && !wE) wall = rng() < 0.5 ? [0, -1] : [0, 1];
-    else if (wW && wE && !wN && !wS) wall = rng() < 0.5 ? [-1, 0] : [1, 0];
-    if (!wall) continue;
-    const kind = hideKinds[hideSpots.length % hideKinds.length];
-    hideSpots.push({ cell: c, wall, kind }); take(c);
+    if (wN && wS && !wW && !wE) return rng() < 0.5 ? [0, -1] : [0, 1];
+    if (wW && wE && !wN && !wS) return rng() < 0.5 ? [-1, 0] : [1, 0];
+    return null;
+  };
+  const anySolidWall = (c: Cell): Cell | null => {
+    // Prioriza muros cuya celda opuesta este abierta para que el frente del escondite quede despejado
+    const clearFront = DIRS.filter(([dx, dy]) => !g[c[1] + dy]?.[c[0] + dx] && g[c[1] - dy]?.[c[0] - dx]);
+    if (clearFront.length) return clearFront[Math.floor(rng() * clearFront.length)];
+    const solid = DIRS.filter(([dx, dy]) => !g[c[1] + dy]?.[c[0] + dx]);
+    return solid.length ? solid[Math.floor(rng() * solid.length)] : null;
+  };
+  // Pasada 1: pasillos rectos bien repartidos
+  for (const minDist of [4.2, 2.8]) {
+    if (hideSpots.length >= hideCount) break;
+    for (const c of shuffle(rng, freeCells())) {
+      if (hideSpots.length >= hideCount) break;
+      if (eu(c, player) < 3.0 || hideSpots.some((h) => eu(h.cell, c) < minDist)) continue;
+      const wall = straightWall(c);
+      if (!wall) continue;
+      const kind = hideKinds[hideSpots.length % hideKinds.length];
+      hideSpots.push({ cell: c, wall, kind }); take(c);
+    }
+  }
+  // Pasada 2: completa el cupo en cualquier pared con frente despejado si el nivel pide mas escondites
+  for (const minDist of [3.0, 2.0]) {
+    if (hideSpots.length >= hideCount) break;
+    for (const c of shuffle(rng, freeCells())) {
+      if (hideSpots.length >= hideCount) break;
+      if (eu(c, player) < 2.5 || hideSpots.some((h) => eu(h.cell, c) < minDist)) continue;
+      const wall = anySolidWall(c);
+      if (!wall) continue;
+      const kind = hideKinds[hideSpots.length % hideKinds.length];
+      hideSpots.push({ cell: c, wall, kind }); take(c);
+    }
   }
 
   const exitNeighbors = DIRS.filter(([dx, dy]) => g[exit[1] + dy]?.[exit[0] + dx]);

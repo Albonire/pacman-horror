@@ -48,10 +48,12 @@ export function Slider({
 }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; format?: (v: number) => string }) {
   const id = useId();
   return (
-    <div className="row">
+    <div className="row row-slider">
       <label htmlFor={id}>{label}</label>
-      <input id={id} type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
-      <span style={{ width: 54, textAlign: "right" }}>{format ? format(value) : value}</span>
+      <div className="row-control">
+        <input id={id} type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+        <span className="row-val">{format ? format(value) : value}</span>
+      </div>
     </div>
   );
 }
@@ -70,8 +72,8 @@ export function Seg<T extends string>({
   label, value, options, onChange,
 }: { label: string; value: T; options: { value: T; label: string }[]; onChange: (v: T) => void }) {
   return (
-    <div className="row">
-      <span style={{ flex: 1, color: "var(--dim)" }}>{label}</span>
+    <div className="row row-seg">
+      <span className="row-label">{label}</span>
       <div className="seg" role="group" aria-label={label}>
         {options.map((o) => (
           <button key={o.value} type="button" aria-pressed={o.value === value} onClick={() => onChange(o.value)}>{o.label}</button>

@@ -88,6 +88,7 @@ export class Synth {
   readonly pink: AudioBuffer;
   readonly brown: AudioBuffer;
   readonly dist: WaveShaperNode;
+  readonly distCurve: Float32Array<ArrayBuffer>;
   /** Medidor tras el limitador (detecta silencio muerto o NaN). */
   readonly analyser: AnalyserNode;
   /** Paso bajo maestro (ver `muffle`). */
@@ -168,8 +169,9 @@ export class Synth {
     if (opts.raw) for (const b of [this.sfx, this.amb, this.music, this.voice]) b.gain.value = 1;
     else this.setReverb(2.2, 0.6);
 
+    this.distCurve = makeDistCurve(40);
     this.dist = ctx.createWaveShaper();
-    this.dist.curve = makeDistCurve(40);
+    this.dist.curve = this.distCurve;
     this.dist.oversample = "2x";
 
     const noise = sharedNoise(ctx.sampleRate, (sec, kind) => this.makeNoise(sec, kind));
@@ -317,15 +319,17 @@ export class Synth {
     return s;
   }
 
-  /** Conecta `node` a un destino y, opcionalmente, al envio de reverb. */
-  out(node: AudioNode, dest: AudioNode, send = 0): void {
+  /** Conecta `node` a un destino y, opcionalmente, al envio de reverb. Devuelve el GainNode de envio si se creo. */
+  out(node: AudioNode, dest: AudioNode, send = 0): GainNode | null {
     node.connect(dest);
     if (send > 0) {
       const g = this.ctx.createGain();
       g.gain.value = send;
       node.connect(g);
       g.connect(this.reverbSend);
+      return g;
     }
+    return null;
   }
 
   /** Con muchas voces vivas se descartan las suaves: en equipos justos cada nodo cuenta para el hilo de audio. */
@@ -341,12 +345,14 @@ export class Synth {
     osc.frequency.setValueAtTime(o.f0, t);
     if (o.f1 && o.f1 !== o.f0) osc.frequency.exponentialRampToValueAtTime(Math.max(1, o.f1), t + o.dur);
     if (o.detune) osc.detune.value = o.detune;
+    const cleanupNodes: AudioNode[] = [osc];
     let node: AudioNode = osc;
-    const chain = (f: BiquadFilterNode) => { node.connect(f); node = f; };
+    const chain = (f: BiquadFilterNode) => { node.connect(f); node = f; cleanupNodes.push(f); };
     if (o.hp) { const f = ctx.createBiquadFilter(); f.type = "highpass"; f.frequency.value = o.hp; chain(f); }
     if (o.lp) { const f = ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = o.lp; chain(f); }
     if (o.bp) { const f = ctx.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = o.bp; f.Q.value = o.q ?? 1; chain(f); }
     const g = ctx.createGain();
+    cleanupNodes.push(g);
     const a = o.a ?? 0.005;
     g.gain.setValueAtTime(0.0001, t);
     g.gain.linearRampToValueAtTime(o.vol * this.trim, t + a);
@@ -357,12 +363,19 @@ export class Synth {
       const lg = ctx.createGain(); lg.gain.value = o.vibDepth ?? 30;
       lfo.connect(lg); lg.connect(osc.detune);
       lfo.start(t); lfo.stop(t + o.dur + 0.05);
+      cleanupNodes.push(lfo, lg);
     }
-    this.out(g, o.dest ?? this.sfx, o.send ?? 0);
+    const sendGain = this.out(g, o.dest ?? this.sfx, o.send ?? 0);
+    if (sendGain) cleanupNodes.push(sendGain);
     osc.start(t);
     osc.stop(t + o.dur + 0.05);
     this.live++;
-    osc.onended = () => { this.live--; };
+    osc.onended = () => {
+      this.live = Math.max(0, this.live - 1);
+      for (const n of cleanupNodes) {
+        try { n.disconnect(); } catch { /* noop */ }
+      }
+    };
     return osc;
   }
 
@@ -373,8 +386,9 @@ export class Synth {
     const t = o.t ?? ctx.currentTime;
     const src = ctx.createBufferSource();
     src.buffer = this.noiseBuf(o.kind ?? "white");
+    const cleanupNodes: AudioNode[] = [src];
     let node: AudioNode = src;
-    const chain = (f: BiquadFilterNode) => { node.connect(f); node = f; };
+    const chain = (f: BiquadFilterNode) => { node.connect(f); node = f; cleanupNodes.push(f); };
     if (o.hp) { const f = ctx.createBiquadFilter(); f.type = "highpass"; f.frequency.value = o.hp; chain(f); }
     if (o.lp) { const f = ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = o.lp; chain(f); }
     if (o.bp) {
@@ -384,49 +398,70 @@ export class Synth {
       chain(f);
     }
     const g = ctx.createGain();
+    cleanupNodes.push(g);
     const a = o.a ?? 0.004;
     g.gain.setValueAtTime(0.0001, t);
     g.gain.linearRampToValueAtTime(o.vol * this.trim, t + a);
     g.gain.exponentialRampToValueAtTime(0.0001, t + o.dur);
     node.connect(g);
-    this.out(g, o.dest ?? this.sfx, o.send ?? 0);
+    const sendGain = this.out(g, o.dest ?? this.sfx, o.send ?? 0);
+    if (sendGain) cleanupNodes.push(sendGain);
     src.start(t, o.offset ?? Math.random() * 1.2);
     src.stop(t + o.dur + 0.05);
     this.live++;
-    src.onended = () => { this.live--; };
+    src.onended = () => {
+      this.live = Math.max(0, this.live - 1);
+      for (const n of cleanupNodes) {
+        try { n.disconnect(); } catch { /* noop */ }
+      }
+    };
     return src;
   }
 
-  /** Voz sintetica: fuente rica en armonicos filtrada por formantes. */
+  /** Voz sintetica: fuente rica en armonicos filtrada por formantes. Limpia todos sus nodos al terminar. */
   formantVoice(opts: {
     t?: number; dur: number; f0: number; f1?: number; vol: number; a?: number;
     formants: [number, number, number][]; // [frecuencia, Q, ganancia]
     type?: OscillatorType; vibRate?: number; vibDepth?: number; noiseMix?: number; dist?: boolean; dest?: AudioNode; send?: number;
   }): void {
+    if (this.overloaded(opts.vol)) return;
     this.made += 8 + opts.formants.length * 3;
     const ctx = this.ctx;
     const t = opts.t ?? ctx.currentTime;
     const src = ctx.createOscillator();
     src.type = opts.type ?? "sawtooth";
     src.frequency.setValueAtTime(opts.f0, t);
-    if (opts.f1) src.frequency.exponentialRampToValueAtTime(opts.f1, t + opts.dur);
+    if (opts.f1) src.frequency.exponentialRampToValueAtTime(Math.max(1, opts.f1), t + opts.dur);
     const mix = ctx.createGain();
+    const cleanupNodes: AudioNode[] = [src, mix];
     src.connect(mix);
     if (opts.noiseMix) {
       const n = this.noiseSource("white", true);
       const ng = ctx.createGain(); ng.gain.value = opts.noiseMix;
       n.connect(ng); ng.connect(mix);
       n.start(t, Math.random()); n.stop(t + opts.dur + 0.05);
+      cleanupNodes.push(n, ng);
     }
     let pre: AudioNode = mix;
-    if (opts.dist) { mix.connect(this.dist); pre = this.dist; }
+    if (opts.dist) {
+      // Crear un WaveShaper efimero por voz con la curva precalculada evita acumular conexiones sobre un nodo global
+      const shaper = ctx.createWaveShaper();
+      shaper.curve = this.distCurve;
+      shaper.oversample = "2x";
+      mix.connect(shaper);
+      pre = shaper;
+      cleanupNodes.push(shaper);
+    }
     const sum = ctx.createGain();
+    cleanupNodes.push(sum);
     for (const [f, q, gain] of opts.formants) {
       const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = f; bp.Q.value = q;
       const g = ctx.createGain(); g.gain.value = gain;
       pre.connect(bp); bp.connect(g); g.connect(sum);
+      cleanupNodes.push(bp, g);
     }
     const env = ctx.createGain();
+    cleanupNodes.push(env);
     const a = opts.a ?? 0.02;
     env.gain.setValueAtTime(0.0001, t);
     env.gain.linearRampToValueAtTime(opts.vol * this.trim, t + a);
@@ -437,9 +472,19 @@ export class Synth {
       const lg = ctx.createGain(); lg.gain.value = opts.vibDepth ?? 40;
       lfo.connect(lg); lg.connect(src.detune);
       lfo.start(t); lfo.stop(t + opts.dur + 0.05);
+      cleanupNodes.push(lfo, lg);
     }
-    this.out(env, opts.dest ?? this.sfx, opts.send ?? 0.2);
-    src.start(t); src.stop(t + opts.dur + 0.05);
+    const sendGain = this.out(env, opts.dest ?? this.sfx, opts.send ?? 0.2);
+    if (sendGain) cleanupNodes.push(sendGain);
+    src.start(t);
+    src.stop(t + opts.dur + 0.05);
+    this.live++;
+    src.onended = () => {
+      this.live = Math.max(0, this.live - 1);
+      for (const n of cleanupNodes) {
+        try { n.disconnect(); } catch { /* noop */ }
+      }
+    };
   }
 
   /** Contadores para el registro de vuelo. */

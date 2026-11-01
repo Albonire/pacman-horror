@@ -10,9 +10,14 @@ function q<T extends HTMLElement>(root: HTMLElement, name: string): T {
   return el;
 }
 
+function qOpt<T extends HTMLElement>(root: HTMLElement, name: string): T | null {
+  return root.querySelector<T>(`[data-hud="${name}"]`);
+}
+
 export class HudController implements HudApi {
   private root: HTMLElement;
   private el: Record<string, HTMLElement> = {};
+  private optEl: Record<string, HTMLElement | null> = {};
   private last: Partial<Record<string, string>> = {};
   private msgTimer: number | null = null;
   private flashTimer: number | null = null;
@@ -26,6 +31,9 @@ export class HudController implements HudApi {
       "crosshair", "hide", "heartGame", "hideTitle", "heartLabel", "heartStress", "heartZone", "heartCursor", "exitArrow"]) {
       this.el[n] = q(root, n);
     }
+    for (const n of ["touchInteractLabel", "touchSonarLabel"]) {
+      this.optEl[n] = qOpt(root, n);
+    }
   }
 
   private set(key: string, name: string, value: string, fn: (v: string) => void): void {
@@ -35,7 +43,10 @@ export class HudController implements HudApi {
     void name;
   }
 
-  setVisible(v: boolean): void { this.root.style.opacity = v ? "1" : "0"; }
+  setVisible(v: boolean): void {
+    this.root.style.opacity = v ? "1" : "0";
+    this.root.dataset.active = v ? "1" : "0";
+  }
 
   update(s: HudState): void {
     const e = this.el;
@@ -62,11 +73,13 @@ export class HudController implements HudApi {
       (e.battery as HTMLElement).style.width = `${ba}%`;
       e.battery.classList.toggle("bar-warn", ba < 25);
       e.battery.classList.toggle("bar-off", !s.lightOn);
+      this.root.dataset.light = s.lightOn ? "1" : "0";
     });
     const bi = Math.round(s.bite * 100);
     this.set("bite", "bite", String(bi), () => {
       (e.bite as HTMLElement).style.width = `${bi}%`;
       e.bite.classList.toggle("bar-ready", bi >= 100);
+      this.root.dataset.biteReady = bi >= 100 ? "1" : "0";
     });
     this.set("power", "power", s.powerFrac > 0 ? "1" : "0", (v) => { e.power.style.opacity = v; });
     if (s.powerFrac > 0) {
@@ -85,7 +98,10 @@ export class HudController implements HudApi {
       e.cam.textContent = s.hidden ? `ESCONDIDO (${hideTag})` : s.camera === "fp" ? "1ª PERSONA [C]" : "3ª PERSONA [C]";
     });
     this.set("crosshair", "crosshair", s.crosshair ? "1" : "0", (v) => { e.crosshair.style.opacity = v; });
-    this.set("hide", "hide", s.hidden ? "1" : "0", (v) => { e.hide.style.opacity = v; });
+    this.set("hide", "hide", s.hidden ? "1" : "0", (v) => {
+      e.hide.style.opacity = v;
+      this.root.dataset.hidden = v;
+    });
     this.set("holding", "hide", s.holding ? "1" : "0", (v) => { e.hide.dataset.holding = v; });
     this.set("hideKind", "hideTitle", s.hideKind ?? "locker", (v) => {
       e.hideTitle.textContent =
@@ -93,8 +109,23 @@ export class HudController implements HudApi {
         v === "table" ? "BAJO LA MESA" :
         "ARMARIO METÁLICO";
     });
+    const interactState = s.hidden ? "leave" : (s.interactHint ?? "");
+    this.set("interactState", "hide", interactState, (v) => {
+      this.root.dataset.interact = v;
+      if (this.optEl.touchInteractLabel) {
+        this.optEl.touchInteractLabel.textContent =
+          v === "leave" ? "SALIR" :
+          v === "switch" ? "LUZ" :
+          v === "hide" ? "ESCONDER" :
+          "USAR";
+      }
+    });
     this.set("heartGame", "heartGame", s.hidden && s.heartMinigame ? "1" : "0", (v) => {
       e.heartGame.style.opacity = v;
+      this.root.dataset.heart = v;
+      if (this.optEl.touchSonarLabel) {
+        this.optEl.touchSonarLabel.textContent = v === "1" ? "LATIDO" : "SONAR";
+      }
     });
     if (s.hidden && s.heartMinigame) {
       const winPct = Math.round(s.heartWindow * 200);
@@ -115,7 +146,7 @@ export class HudController implements HudApi {
         e.heartLabel.textContent =
           v === "hit" ? "LATIDO EN CALMA" :
           v === "miss" ? "¡PULSO DESCOMPASADO!" :
-          "PULSA [ESPACIO] EN EL CENTRO";
+          "PULSA AL RITMO EN EL CENTRO";
       });
     }
     // el miedo sube a saltos de 0,05 para no tocar el DOM en cada frame

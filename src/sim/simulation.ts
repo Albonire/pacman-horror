@@ -184,6 +184,7 @@ export class Simulation {
     this.layout = init.layout ?? generateLayout({
       W: init.level.W, H: init.level.H, seed: init.level.seed,
       loopChance: init.level.loopChance, braid: init.level.braid,
+      hideSpots: init.level.hideSpots,
     });
     this.maze = new Maze(this.layout);
     this.rng = init.rng ?? mulberry32((init.level.seed ^ 0x9e3779b9) >>> 0);

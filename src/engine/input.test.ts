@@ -137,4 +137,42 @@ describe("Input", () => {
 
     input.detach();
   });
+
+  it("integra joystick tactil, giro tactil y botones radiales sin activar pointer lock", () => {
+    const { callbacks, input } = makeInput();
+    input.capture = true;
+    input.mode = "mouse";
+
+    input.setTouchMove(0.8, -0.4, true);
+    expect(input.touchActive).toBe(true);
+    expect(input.needsLock).toBe(false);
+    expect(input.axes().forward).toBeCloseTo(0.8);
+    expect(input.axes().strafe).toBeCloseTo(-0.4);
+    expect(input.sprint).toBe(true);
+
+    input.addTouchLook(40, -18);
+    const look = input.consumeLook();
+    expect(look.dx).toBe(40);
+    expect(look.dy).toBe(-18);
+
+    input.setTouchSonar(true);
+    expect(input.sonar).toBe(true);
+    input.setTouchSonar(false);
+    expect(input.sonar).toBe(false);
+
+    input.triggerInteract();
+    input.triggerBite();
+    input.triggerLight();
+    input.triggerCamera();
+    expect(callbacks.onInteract).toHaveBeenCalledTimes(1);
+    expect(callbacks.onBite).toHaveBeenCalledTimes(1);
+    expect(callbacks.onToggleLight).toHaveBeenCalledTimes(1);
+    expect(callbacks.onToggleCamera).toHaveBeenCalledTimes(1);
+
+    input.clear();
+    expect(input.axes().forward).toBe(0);
+    expect(input.sprint).toBe(false);
+    input.detach();
+  });
 });
+

@@ -48,11 +48,12 @@ export class CameraRig {
 
   setAspect(a: number): void { this.camera.aspect = a; this.camera.updateProjectionMatrix(); }
 
-  /** FOV vertical equivalente a uno horizontal. Una pantalla 16:9 con 78 grados verticales daba ~110 horizontales (efecto ojo de pez). */
+  /** FOV vertical equivalente a uno horizontal. En pantallas verticales compensa el aspecto para no estrechar el pasillo. */
   vfov(hDeg: number): number {
-    const a = Math.max(0.5, this.camera.aspect);
+    const rawA = Math.max(0.35, this.camera.aspect || 1);
+    const a = rawA < 1 ? Math.max(0.68, Math.pow(rawA, 0.58)) : rawA;
     const v = (2 * Math.atan(Math.tan((hDeg * Math.PI) / 360) / a) * 180) / Math.PI;
-    return Math.max(35, Math.min(95, v));
+    return Math.max(38, Math.min(96, v));
   }
 
   update(dt: number, p: PlayerSim, maze: Maze, opts: { exertion: number; tension: number; frozen: boolean }): void {

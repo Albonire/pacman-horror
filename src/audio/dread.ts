@@ -65,6 +65,8 @@ export class Dread {
     return { x: x + Math.cos(a) * d, y: 0.8 + rnd() * 1.2, z: z + Math.sin(a) * d };
   }
 
+  private pendingPanners: AudioNode[] = [];
+
   /** Fuente posicional con una ganancia de compensacion (las distancias largas atenuan mucho). */
   private panner(p: { x: number; y: number; z: number }, ref = 2, rolloff = 1.1, boost = 1): AudioNode {
     const S = this.S;
@@ -73,12 +75,23 @@ export class Dread {
     g.gain.value = boost;
     pn.connect(g);
     g.connect(this.bus);
+    this.pendingPanners.push(pn, g);
     return pn;
   }
 
   private track(seconds: number): void {
     this.active++;
-    window.setTimeout(() => { this.active = Math.max(0, this.active - 1); }, seconds * 1000);
+    const toClean = this.pendingPanners.splice(0);
+    if (typeof window !== "undefined") {
+      window.setTimeout(() => {
+        this.active = Math.max(0, this.active - 1);
+        for (const n of toClean) {
+          try { n.disconnect(); } catch { /* noop */ }
+        }
+      }, (seconds + 0.35) * 1000);
+    } else {
+      this.active = Math.max(0, this.active - 1);
+    }
   }
 
   play(kind: DreadKind, s: DreadState): void {

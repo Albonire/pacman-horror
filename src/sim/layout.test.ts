@@ -51,4 +51,20 @@ describe("generateLayout", () => {
     expect(m.isWalkable(-1, l.tunnelRow)).toBe(true);
     expect(m.isWalkable(-1, l.tunnelRow - 1)).toBe(false);
   });
+
+  it("escala los escondites de abundantes en el Nivel 0 (11) a escasos en el Nivel Final (4)", async () => {
+    const { CAMPAIGN } = await import("../config/campaign");
+    const counts = CAMPAIGN.map((lv) => {
+      const l = generateLayout({
+        W: lv.W, H: lv.H, seed: lv.seed, loopChance: lv.loopChance, braid: lv.braid, hideSpots: lv.hideSpots,
+      });
+      expect(validateLayout(l)).toEqual([]);
+      return l.hideSpots.length;
+    });
+    expect(counts).toEqual([11, 9, 8, 7, 6, 4]);
+    for (let i = 1; i < counts.length; i++) {
+      expect(counts[i]).toBeLessThan(counts[i - 1]);
+    }
+  });
 });
+

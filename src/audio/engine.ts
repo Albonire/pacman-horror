@@ -189,7 +189,10 @@ export class HorrorAudio implements GameAudio {
       recorder.event(`contexto: ${ctx.state}`);
       this.stateChangedAt = performance.now() / 1000;
       if (ctx.state === "running") { this.everRan = true; this.unbindEarlyGestures(); }
-      if (this.wantRunning && ctx.state !== "running" && ctx.state !== "closed" && this.S?.ctx === ctx) this.apply();
+      if (this.wantRunning && ctx.state !== "running" && ctx.state !== "closed" && this.S?.ctx === ctx) {
+        this.bindEarlyGestures();
+        this.apply();
+      }
     };
     if (ctx.state === "running") { this.everRan = true; this.unbindEarlyGestures(); }
   }
@@ -200,7 +203,9 @@ export class HorrorAudio implements GameAudio {
     if (this.meterTimer === null) this.meterTimer = window.setInterval(() => this.meter(0.5), 500);
     if (!this.gestureBound) {
       this.gestureBound = true;
-      for (const ev of ["keydown", "pointerdown", "focus", "pageshow"]) window.addEventListener(ev, this.kick, true);
+      for (const ev of ["keydown", "pointerdown", "pointerup", "touchstart", "touchend", "click", "focus", "pageshow"]) {
+        window.addEventListener(ev, this.kick, true);
+      }
       document.addEventListener("visibilitychange", this.kick);
       document.addEventListener("visibilitychange", this.onVisibility);
       window.addEventListener("focus", this.onVisibility);
@@ -214,7 +219,9 @@ export class HorrorAudio implements GameAudio {
     this.watchdog = null; this.meterTimer = null;
     if (this.gestureBound) {
       this.gestureBound = false;
-      for (const ev of ["keydown", "pointerdown", "focus", "pageshow"]) window.removeEventListener(ev, this.kick, true);
+      for (const ev of ["keydown", "pointerdown", "pointerup", "touchstart", "touchend", "click", "focus", "pageshow"]) {
+        window.removeEventListener(ev, this.kick, true);
+      }
       document.removeEventListener("visibilitychange", this.kick);
       document.removeEventListener("visibilitychange", this.onVisibility);
       window.removeEventListener("focus", this.onVisibility);
@@ -227,8 +234,12 @@ export class HorrorAudio implements GameAudio {
   /** Cualquier gesto del usuario es una oportunidad para reanudar un contexto que el navegador haya detenido. */
   private kick = (): void => {
     if (this.wantRunning) {
-      if (!this.S) this.resume();
-      else if (this.S.ctx.state !== "running") this.apply();
+      if (!this.S) {
+        this.resume();
+      } else if (this.S.ctx.state !== "running") {
+        try { void this.S.ctx.resume(); } catch { /* noop */ }
+        this.apply();
+      }
     }
   };
 
@@ -241,15 +252,22 @@ export class HorrorAudio implements GameAudio {
     this.record(S);
     if (st === "closed") { this.rebuild("el contexto se cerro"); return; }
     if (st !== "running") {
-      this.apply(); this.clockWall = 0;
+      // En navegadores moviles (Brave/Chromium/iOS), nunca cerrar ni recrear un AudioContext desde un setInterval
+      // cuando esta "suspended" o "interrupted", porque un contexto nuevo fuera de gesto nace bloqueado.
+      // En su lugar, aseguramos que los gestos tactiles en captura lo reanuden al instante.
+      this.bindEarlyGestures();
+      this.apply();
+      this.clockWall = 0;
       const visible = typeof document === "undefined" || document.visibilityState === "visible";
-      // ya sono antes y lleva segundos sin volver: la promesa de resume() quedo colgada o el dispositivo cambio
       this.notRunningFor = this.everRan && visible ? this.notRunningFor + 1 : 0;
-      if (this.notRunningFor >= 5) { this.notRunningFor = 0; this.rebuild(`el contexto sigue ${st}`); }
       return;
     }
     this.notRunningFor = 0; this.everRan = true;
-    if (this.clockStalled(S)) { this.rebuild("el reloj de audio no avanza"); return; }
+    if (this.clockStalled(S)) {
+      this.heal(S);
+      try { void S.ctx.resume(); } catch { /* noop */ }
+      return;
+    }
     this.noteChoppy(S);
     this.heal(S);
     // vacia los efectos que llegaron mientras el contexto estaba parado (si no son muy viejos)
@@ -298,7 +316,7 @@ export class HorrorAudio implements GameAudio {
   /**
    * El contexto puede decir "running" y no avanzar (cambio de dispositivo de salida, hilo de audio ahogado):
    * el reloj del contexto debe avanzar casi al ritmo del reloj de pared. Tres segundos seguidos a menos de la
-   * mitad cuentan como parado y se reconstruye el grafo.
+   * mitad cuentan como parado.
    */
   private clockStalled(S: Synth): boolean {
     const wall = performance.now() / 1000, audio = S.ctx.currentTime;
@@ -362,7 +380,7 @@ export class HorrorAudio implements GameAudio {
     };
   }
 
-  /** Mide la salida: NaN/Inf o silencio sostenido significan que el grafo se rompio. */
+  /** Mide la salida: cura ganancias si hay NaN o silencio sostenido, sin destruir el AudioContext desbloqueado en movil. */
   private meter(dt: number): void {
     const S = this.S;
     if (!S || !this.wantRunning || S.ctx.state !== "running") { this.quietFor = 0; return; }
@@ -376,15 +394,21 @@ export class HorrorAudio implements GameAudio {
       if (a > peak) peak = a;
     }
     this.lastPeak = Math.max(peak, this.lastPeak * 0.8);
-    if (bad) { this.rebuild("salida con NaN"); return; }
+    if (bad) {
+      S.removeMuffle();
+      this.heal(S);
+      return;
+    }
     const audible = !this.muted && this.volume > 0.01;
     // silencios legitimos: ducking previo a un susto, muerte en curso (paso bajo y corte de capas)
     const excused = S.ducked || S.isMuffled || performance.now() / 1000 - this.lastDead < 8;
     if (peak >= QUIET_PEAK) { this.quietFor = 0; this.quietRebuilds = 0; return; }
     this.quietFor = audible && !excused ? this.quietFor + dt : 0;
-    // primero se intenta curar (ganancia colapsada); si sigue mudo, se reconstruye (como mucho 3 veces seguidas)
-    if (this.quietFor > 3 && !this.quietHealed) { this.quietHealed = true; this.heal(S); }
-    else if (this.quietFor > 6 && this.quietRebuilds < 3) { this.quietRebuilds++; this.quietHealed = false; this.rebuild("silencio sostenido"); }
+    // Cura ganancias si alguna colapso, pero NUNCA cierra el AudioContext desde el temporizador
+    if (this.quietFor > 3 && !this.quietHealed) {
+      this.quietHealed = true;
+      this.heal(S);
+    }
     if (this.quietFor === 0) this.quietHealed = false;
   }
 

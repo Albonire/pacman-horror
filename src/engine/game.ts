@@ -23,6 +23,7 @@ import "./lightFix";
 import { ScareDirector } from "./director";
 import { EyesView } from "./eyesView";
 import { disposeFaceCache, GhostView } from "./ghostView";
+import { triggerBiteHaptics } from "./haptics";
 import { Input } from "./input";
 import { LevelView } from "./levelView";
 import { sharedUniforms } from "./materials";
@@ -313,7 +314,7 @@ export class Game {
     this.rig.pitch = 0;
     this.hud.setVisible(true);
     this.setPhase("playing");
-    this.input.requestLock();
+    if (this.input.needsLock) this.input.requestLock();
     this.lockHintT = 0;
     this.hud.message(`${this.level.subtitle}: devora todos los nodos`, 4);
   }
@@ -333,7 +334,7 @@ export class Game {
     this.input.capture = true;
     this.input.mode = this.settings.controlMode;
     this.setPhase("playing");
-    this.input.requestLock();
+    if (this.input.needsLock) this.input.requestLock();
   }
 
   togglePause(): void {
@@ -684,7 +685,7 @@ export class Game {
     if (!active || rawDt <= 0 || rawDt > 0.6) { if (!active) { P.warm = 0; P.acc = 0; P.n = 0; } return; } // parones (pestana, carga) no cuentan
     this.frameMs.push(rawDt * 1000);
     if (this.frameMs.length > 240) this.frameMs.shift();
-    if (!this.settings.dynamicRes) return;
+    if (!this.settings.dynamicRes || this.isSoftwareGl) return;
     P.warm += rawDt;
     if (P.warm < 2.5) return; // compilacion de shaders y subida de texturas
     P.acc += rawDt; P.n++; P.since += rawDt;
@@ -804,11 +805,12 @@ export class Game {
     }
     const ih = sim.interactHint;
     const hideKind = sim.interactHideKind;
+    const keyTag = this.input.touchActive ? "Toca" : "E:";
     const hideLabel =
-      hideKind === "vent" ? "E: meterte en el conducto" :
-      hideKind === "table" ? "E: esconderte bajo la mesa" :
-      "E: esconderte en el armario";
-    const interactHint = ih === "hide" ? hideLabel : ih === "switch" ? "E: encender la luz (hace ruido)" : ih === "leave" ? null : null; // dentro del escondite la ayuda va en la etiqueta inferior, no en el centro
+      hideKind === "vent" ? `${keyTag} meterte en el conducto` :
+      hideKind === "table" ? `${keyTag} esconderte bajo la mesa` :
+      `${keyTag} esconderte en el armario`;
+    const interactHint = ih === "hide" ? hideLabel : ih === "switch" ? `${keyTag} encender la luz (hace ruido)` : ih === "leave" ? null : null; // dentro del escondite la ayuda va en la etiqueta inferior, no en el centro
     if (this.input.needsLock && !this.input.locked) {
       this.lockHintT += dt;
       if (interactHint) this.hud.showHint(interactHint);
@@ -1069,6 +1071,7 @@ export class Game {
           }
           break;
         case "bite":
+          triggerBiteHaptics(e.stunned > 0);
           if (e.stunned > 0) {
             this.audio.playFreeze(true);
             this.rig.addTrauma(0.3); this.hitStop = 0.08;
@@ -1505,6 +1508,7 @@ export class Game {
       exitDir: this.exitDirection(),
       fruitName: sim.fruit.active ? this.level.fruitName : null,
       muted: this.settings.muted,
+      interactHint: sim.interactHint,
     };
     this.hud.update(s);
   }
