@@ -87,19 +87,17 @@ export function noticePlayer(g: GhostSim, ctx: AIContext, dt: number): void {
   }
 }
 
-/** Celda de barrido alrededor del ultimo avistamiento: en equipo cada fantasma de apoyo explora una rama distinta. */
+/** Celda de barrido alrededor del ultimo avistamiento: explora los cruces de las ramas salientes en vez de rondar en el mismo sitio. */
 export function searchTarget(g: GhostSim, ctx: AIContext): Cell {
   const base = g.lastSeen ?? ctx.playerCell;
-  const step = Math.floor(g.lostT * 0.8 + g.kind * 2.1);
-  if (g.kind !== 0 && otherHunters(g, ctx).length > 0) {
-    const branches = DIRS.filter(([dx, dy]) => ctx.maze.isWalkable(base[0] + dx, base[1] + dy));
-    if (branches.length >= 2) {
-      const dir = branches[(step + g.kind) % branches.length];
-      return ctx.maze.nearestWalkable(junctionAhead(ctx.maze, base, dir, 3));
-    }
+  const step = Math.floor(g.lostT * 0.9 + g.kind * 2.1);
+  const branches = DIRS.filter(([dx, dy]) => ctx.maze.isWalkable(base[0] + dx, base[1] + dy));
+  if (branches.length >= 2) {
+    const dir = branches[(step + g.kind) % branches.length];
+    return ctx.maze.nearestWalkable(junctionAhead(ctx.maze, base, dir, 4));
   }
   const off = SEARCH_RING[step % SEARCH_RING.length];
-  return ctx.maze.nearestWalkable([base[0] + off[0], base[1] + off[1]]);
+  return ctx.maze.nearestWalkable([base[0] + off[0] * 2, base[1] + off[1] * 2]);
 }
 
 /** Vector cardinal de una direccion de rejilla; util para "detras del jugador". */
@@ -177,8 +175,8 @@ function sightedTarget(g: GhostSim, ctx: AIContext): Cell {
       return ahead;
     case 2: // Resonador: flanquea al jugador usando al Acechador; si esta cubierto corta por delante
       return covered ? ahead : ctx.playerNoisy ? pc : flankTarget(g, ctx, 2);
-    default: // Estatico: timido, mantiene su papel (ver chaseTarget)
-      return d > (ctx.playerNoisy ? 4 : 8) ? pc : g.corner;
+    default: // Estatico: si otro cazador ya presiona, corta el cruce delantero; si no, mantiene su distancia de acecho
+      return covered ? ahead : d > (ctx.playerNoisy ? 4 : 8) ? pc : g.corner;
   }
 }
 
@@ -194,6 +192,13 @@ export function chaseTarget(g: GhostSim, ctx: AIContext): Cell {
     if (g.lostT > ctx.memory) return searchTarget(g, ctx);
     // la Emboscadora y el Resonador predicen a donde fue: siguen el pasillo desde donde lo vieron por ultima vez
     if (tactics >= 2 && (g.kind === 1 || g.kind === 2)) return ctx.maze.nearestWalkable(junctionAhead(ctx.maze, g.lastSeen, g.lastHeading, 4));
+    // si cualquier fantasma ya llego a la celda donde vio al jugador por ultima vez, proyecta por el pasillo en vez de quedarse quieto
+    if (!g.sawPlayer && g.cx === g.lastSeen[0] && g.cy === g.lastSeen[1]) {
+      if (g.lastHeading[0] !== 0 || g.lastHeading[1] !== 0) {
+        return ctx.maze.nearestWalkable(junctionAhead(ctx.maze, g.lastSeen, g.lastHeading, 4));
+      }
+      return searchTarget(g, ctx);
+    }
     return g.lastSeen;
   }
   switch (g.kind) {

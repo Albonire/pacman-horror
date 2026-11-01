@@ -74,9 +74,9 @@ const HIDE_GASP = 0.25;
 const ENTER_SEEN = 0.7;
 const ENTER_HEARD = 0.4;
 /** Revision de armarios: radio (celdas) alrededor del ultimo avistamiento, tiempo mirando dentro y espera antes de repetir. */
-const CHECK_RADIUS = 4;
-const CHECK_LINGER = 2.0;
-const CHECK_COOLDOWN = 25;
+const CHECK_RADIUS = 3.2;
+const CHECK_LINGER = 1.5;
+const CHECK_COOLDOWN = 40;
 const HIDE_DEPTH = 0.95;
 const BITE_STUN = 1.7;
 
@@ -137,8 +137,16 @@ export class Simulation {
   holdingBreath = false;
   /** Fantasmas que vieron directamente al jugador entrar en el escondite actual. */
   private witnesses = new Set<GhostSim>();
+  /** Fantasmas que oyeron al jugador entrar corriendo o jadear cerca del escondite actual. */
+  private suspectsHide = new Set<GhostSim>();
+  /** Fantasmas que ya revisaron el escondite actual y se marcharon convencidos de que no hay nadie. */
+  private dismissedHide = new Set<GhostSim>();
   /** Fantasmas que oyeron un jadeo de fallo a corta distancia frente al escondite. */
   private gaspExposed = new Set<GhostSim>();
+  /** Instante global de la ultima revision de cada escondite (evita que varios fantasmas revisen el mismo en fila). */
+  private spotCheckedAt: number[] = [];
+  /** Puntos de patrulla distribuidos por cuadrantes para que los fantasmas recorran todo el mapa sin acampar. */
+  private patrolWaypoints: Cell[] = [];
   /** Estado del minijuego ritmico de latido del corazon al esconderse con un fantasma cerca. */
   heartMinigame = false;
   /** Fase actual del pulso cardiaco (0..1); la zona central de acierto esta en torno a 0.5. */
@@ -219,6 +227,14 @@ export class Simulation {
     this.initSteamVents();
 
     const corners: Cell[] = [[W - 2, 1], [1, 1], [W - 2, H - 2], [1, H - 2]];
+    const midAnchors: Cell[] = [
+      [Math.max(1, Math.floor(W * 0.72)), Math.max(1, Math.floor(H * 0.28))],
+      [Math.max(1, Math.floor(W * 0.28)), Math.max(1, Math.floor(H * 0.28))],
+      [Math.max(1, Math.floor(W * 0.72)), Math.max(1, Math.floor(H * 0.72))],
+      [Math.max(1, Math.floor(W * 0.28)), Math.max(1, Math.floor(H * 0.72))],
+    ];
+    this.patrolWaypoints = [...corners, ...midAnchors].map((c) => this.maze.nearestWalkable(c));
+    this.spotCheckedAt = this.hideSpots.map(() => -1e9);
     const count = Math.max(1, Math.min(4, this.level.ghosts + this.diff.extraGhosts));
     for (let i = 0; i < count; i++) {
       this.ghosts.push(new GhostSim(i as GhostKind, this.maze, this.layout.ghosts[i], this.maze.nearestWalkable(corners[i])));
@@ -302,11 +318,14 @@ export class Simulation {
     this.hiddenSeen = false;
     this.hiddenSuspected = false;
     this.witnesses.clear();
+    this.suspectsHide.clear();
+    this.dismissedHide.clear();
     this.gaspExposed.clear();
     this.suspicion.clear();
     this.hideThreat = 0; this.holdingBreath = false; this.holdLock = false;
     this.heartMinigame = false; this.heartPhase = 0; this.heartStress = 0; this.heartFeedback = 0;
     this.rhythmCalm = 0; this.beatHandled = false; this.prevSonarInput = false;
+    this.spotCheckedAt = this.hideSpots.map(() => -1e9);
     for (const gh of this.ghosts) { gh.checkSpot = -1; gh.checkT = 0; }
     this.searchT.clear();
     this.attemptTime = 0;
@@ -457,10 +476,12 @@ export class Simulation {
       this.waveIndex++;
       this.waveMode = this.waveIndex % 2 === 0 ? "scatter" : "chase";
       this.waveTimer = this.waveDuration(this.waveIndex);
+      const hiddenSafe = !!this.hidden && !this.hiddenSeen && !this.hiddenSuspected;
       for (const g of this.ghosts) {
         if (g.mode === "scatter" || g.mode === "chase") {
-          if (g.mode !== this.waveMode) g.reverseQueued = true;
-          g.mode = this.waveMode;
+          const targetMode = hiddenSafe && !this.shouldGhostInspectHide(g) ? "scatter" : this.waveMode;
+          if (g.mode !== targetMode) g.reverseQueued = true;
+          g.mode = targetMode;
         }
       }
       this.emit({ type: "waveChange", mode: this.waveMode });
@@ -468,7 +489,8 @@ export class Simulation {
   }
 
   private wake(g: GhostSim, startled: boolean): void {
-    g.mode = this.frightTimer > 0 ? "frightened" : this.waveMode;
+    const hiddenSafe = !!this.hidden && !this.hiddenSeen && !this.hiddenSuspected;
+    g.mode = this.frightTimer > 0 ? "frightened" : hiddenSafe ? "scatter" : this.waveMode;
     g.wakeTimer = 0;
     g.startled = false;
     g.awakeFor = 0;
@@ -477,6 +499,7 @@ export class Simulation {
   }
 
   private isGazed(g: GhostSim): boolean {
+    if (this.hidden) return false;
     const p = this.player;
     const dx = g.x - p.x, dz = g.z - p.z;
     const d = Math.hypot(dx, dz);
@@ -535,14 +558,26 @@ export class Simulation {
       if (g.frozen) { g.refreshWorld(this.maze); continue; }
 
       g.updateStealth(dt, this.diff.silentChance);
-      // percepcion y memoria (ver u oir al jugador)
-      if (g.mode === "scatter" || g.mode === "chase") noticePlayer(g, ctx, dt);
+      // percepcion y memoria: si el jugador ya esta dentro de un escondite no se le detecta por vision de pasillo
+      if (this.hidden) {
+        g.sawPlayer = false;
+        if (g.lastSeen && !this.shouldGhostInspectHide(g)) {
+          g.lostT += dt;
+          if (g.lostT > ctx.memory + ctx.searchTime) {
+            g.lastSeen = null;
+            g.lostT = 0;
+          }
+        }
+      } else if (g.mode === "scatter" || g.mode === "chase") {
+        noticePlayer(g, ctx, dt);
+      }
 
       const inTunnel = g.cy === this.maze.tunnelRow && (g.cx <= 2 || g.cx >= this.maze.W - 3);
       const tunnel = inTunnel ? K.GHOST_TUNNEL_FACTOR : 1;
       let wrapped = false;
 
       if (g.mode === "eaten") {
+        ctx.avoidCells = undefined;
         g.speedCells = K.GHOST_EATEN_SPEED;
         wrapped = g.advance(this.maze, dt, (gg) => chooseToward(gg, this.ctx, gg.spawn, 0));
         if (g.cx === g.spawn[0] && g.cy === g.spawn[1]) {
@@ -550,16 +585,22 @@ export class Simulation {
           g.wakeTimer = 3.2;
         }
       } else if (g.mode === "frightened") {
+        ctx.avoidCells = undefined;
         g.speedCells = baseSpeed * K.GHOST_FRIGHT_FACTOR * tunnel;
         wrapped = g.advance(this.maze, dt, (gg) => chooseFlee(gg, ctx));
       } else {
         // scatter / chase
         let speed = baseSpeed * tunnel;
         let mode = g.mode;
-        if (this.hidden && !this.hiddenSeen && !this.hiddenSuspected && mode === "chase") mode = "scatter"; // perdio el rastro
-        // con memoria activa la dispersion se anula: el fantasma sigue cazando
-        if (isAlerted(g) && mode === "scatter") mode = "chase";
-        if (g.kind === 0 && elroy > 0) { mode = "chase"; speed *= elroy === 2 ? 1.08 : 1.04; }
+        const inspectingCurrentHide = this.shouldGhostInspectHide(g);
+        if (this.hidden && !inspectingCurrentHide) {
+          // mientras el jugador esta escondido y este fantasma no tiene pistas activas sobre el escondite, se dispersa lejos
+          mode = "scatter";
+        } else {
+          // con memoria activa la dispersion se anula: el fantasma sigue cazando
+          if (isAlerted(g) && mode === "scatter") mode = "chase";
+          if (g.kind === 0 && elroy > 0) { mode = "chase"; speed *= elroy === 2 ? 1.08 : 1.04; }
+        }
         // el rastro del Acechador le da ventaja: solo a el, nunca a la velocidad global
         if (g.kind === 0 && mode === "chase") speed *= this.diff.stalkerSpeed;
         if (g.dash > 0) speed *= 1.65;
@@ -587,43 +628,57 @@ export class Simulation {
         if (this.hidden) {
           const distToHide = Math.hypot(g.x - this.hidden.x, g.z - this.hidden.z);
           const st = this.searchT.get(g) ?? 0;
-          const shouldInspect =
-            g.mode === "chase" ||
-            this.witnesses.has(g) ||
-            this.gaspExposed.has(g) ||
-            this.hiddenSeen ||
-            this.hiddenSuspected ||
-            (g.checkSpot >= 0 && this.hideSpots[g.checkSpot] === this.hidden);
-          if (shouldInspect && distToHide < HIDE_SEARCH_RANGE && st >= 0 && this.maze.rayClear(g.x, g.z, this.player.x, this.player.z, 0.4)) {
-            // el fantasma se detiene frente al escondite para registrarlo (en patrulla scatter sin pistas pasa de largo)
+          if (inspectingCurrentHide && distToHide < HIDE_SEARCH_RANGE && st >= 0 && this.maze.rayClear(g.x, g.z, this.player.x, this.player.z, 0.4)) {
+            // el fantasma se detiene frente al escondite solo si tiene un motivo real para inspeccionarlo
             speed = 0;
             gaze = this.doorOf(this.hidden); // mira la puerta
           }
         }
-        // revision de un escondite: se detiene junto a el mirando hacia dentro y luego sigue
+        // revision de un escondite: se detiene junto a el mirando hacia dentro y luego se marcha lejos
         const chk = this.hideSpots[g.checkSpot];
         if (chk && Math.hypot(g.x - chk.x, g.z - chk.z) < 0.6) {
           speed = 0;
           gaze = this.doorOf(chk);
           g.checkT += dt;
           if (g.checkT >= CHECK_LINGER) {
-            g.checkedAt[g.checkSpot] = this.time;
+            const spotIdx = g.checkSpot;
+            g.checkedAt[spotIdx] = this.time;
+            this.spotCheckedAt[spotIdx] = this.time;
             g.checkSpot = -1;
             g.checkT = 0;
-            if (this.hidden && !this.witnesses.has(g) && !this.gaspExposed.has(g)) {
+            if (this.hidden && chk === this.hidden && !this.witnesses.has(g) && !this.gaspExposed.has(g)) {
+              this.dismissGhostFromHide(g);
+            } else {
               g.lastSeen = null;
+              g.lostT = 0;
               g.reverseQueued = true;
             }
           }
         } else if (g.checkSpot >= 0 && !chk) { g.checkSpot = -1; g.checkT = 0; }
+
+        // Configura zonas de repulsa alrededor de los escondites cuando el fantasma patrulla o se dispersa
+        if (this.hidden && !this.shouldGhostInspectHide(g)) {
+          ctx.avoidCells = [{ cell: this.hidden.cell, radius: 6.5, penalty: 12 }];
+        } else if (!this.hidden && (mode === "scatter" || (!g.sawPlayer && g.checkSpot < 0))) {
+          ctx.avoidCells = this.hideSpots.map((h) => ({ cell: h.cell, radius: 2.6, penalty: 2.5 }));
+        } else {
+          ctx.avoidCells = undefined;
+        }
+
         g.speedCells = speed;
         wrapped = g.advance(this.maze, dt, (gg) => {
           let target: Cell;
-          if (this.hidden && (this.witnesses.has(gg) || this.gaspExposed.has(gg) || this.hiddenSeen || this.hiddenSuspected)) {
-            // inspeccion activa del escondite donde vieron u oyeron entrar al jugador
-            target = this.hidden.cell;
+          if (this.hidden) {
+            if (this.shouldGhostInspectHide(gg)) {
+              // inspeccion activa del escondite donde este fantasma vio u oyo entrar al jugador
+              target = this.hidden.cell;
+            } else if (gg.checkSpot >= 0 && this.hideSpots[gg.checkSpot] && !this.dismissedHide.has(gg)) {
+              target = this.hideSpots[gg.checkSpot].cell;
+            } else {
+              target = this.nextPatrolTarget(gg, this.hidden.cell);
+            }
           } else if (mode === "scatter") {
-            target = gg.corner;
+            target = this.nextPatrolTarget(gg);
           } else if (this.checkTarget(gg)) {
             target = this.checkTarget(gg)!;
           } else {
@@ -631,6 +686,7 @@ export class Simulation {
           }
           return chooseToward(gg, ctx, target, gg.sawPlayer ? 0 : ctx.mistake);
         });
+        ctx.avoidCells = undefined;
         if (gaze) g.yaw = Math.atan2(gaze.x - g.x, gaze.z - g.z);
       }
       if (wrapped) this.emit({ type: "wrap", who: g.kind });
@@ -824,13 +880,22 @@ export class Simulation {
       return true;
     };
     this.witnesses.clear();
+    this.suspectsHide.clear();
+    this.dismissedHide.clear();
     this.gaspExposed.clear();
     for (const g of this.ghosts) {
       if (canGhostSeeEntry(g)) this.witnesses.add(g);
     }
     const seen = this.witnesses.size > 0;
     const hearRange = h.kind === "vent" ? 9.5 : 12;
-    const heard = !seen && (p.running || p.exhausted) && this.ghosts.some((g) => g.lethal && Math.hypot(g.x - p.x, g.z - p.z) < hearRange);
+    if (!seen && (p.running || p.exhausted)) {
+      for (const g of this.ghosts) {
+        if (g.lethal && Math.hypot(g.x - p.x, g.z - p.z) < hearRange) {
+          this.suspectsHide.add(g);
+        }
+      }
+    }
+    const heard = this.suspectsHide.size > 0;
     this.hiddenSeen = seen;
     this.hiddenSuspected = heard;
     this.suspicion.clear();
@@ -844,13 +909,22 @@ export class Simulation {
     this.beatHandled = false;
     for (const g of this.ghosts) {
       if (!g.lethal) continue;
-      const dd = Math.hypot(g.x - p.x, g.z - p.z);
-      if (this.witnesses.has(g)) this.suspicion.set(g, ENTER_SEEN);
-      else if ((p.running || p.exhausted) && dd < hearRange) this.suspicion.set(g, ENTER_HEARD);
+      if (this.witnesses.has(g)) {
+        this.suspicion.set(g, ENTER_SEEN);
+      } else if (this.suspectsHide.has(g)) {
+        this.suspicion.set(g, ENTER_HEARD);
+      } else {
+        // los fantasmas que no vieron ni oyeron entrar al jugador pierden su rastro directo y pasan a patrullar lejos
+        g.lastSeen = null;
+        g.lostT = 0;
+        g.sawPlayer = false;
+        if (g.mode === "chase") {
+          g.mode = "scatter";
+          g.reverseQueued = true;
+        }
+      }
     }
-    // si nadie te vio ni te oyo entrar, pierden el rastro
     if (!seen && !heard) {
-      for (const g of this.ghosts) { g.lastSeen = null; g.lostT = 0; g.sawPlayer = false; }
       this.ctx.trail.clear();
     }
     this.prevLight = p.flashlightOn;
@@ -871,6 +945,8 @@ export class Simulation {
     this.hiddenSeen = false;
     this.hiddenSuspected = false;
     this.witnesses.clear();
+    this.suspectsHide.clear();
+    this.dismissedHide.clear();
     this.gaspExposed.clear();
     this.suspicion.clear();
     this.hideThreat = 0;
@@ -949,6 +1025,71 @@ export class Simulation {
     }
   }
 
+  /** True si este fantasma concreto tiene motivos para acercarse a inspeccionar el escondite actual. */
+  private shouldGhostInspectHide(g: GhostSim): boolean {
+    if (!this.hidden || this.dismissedHide.has(g)) return false;
+    return (
+      g.mode === "chase" ||
+      this.witnesses.has(g) ||
+      this.gaspExposed.has(g) ||
+      this.suspectsHide.has(g) ||
+      (g.checkSpot >= 0 && this.hideSpots[g.checkSpot] === this.hidden)
+    );
+  }
+
+  /** Marca que un fantasma ya inspecciono el escondite actual sin exito y lo envia al extremo opuesto del mapa. */
+  private dismissGhostFromHide(g: GhostSim): void {
+    this.dismissedHide.add(g);
+    this.suspectsHide.delete(g);
+    this.witnesses.delete(g);
+    this.hiddenSeen = this.witnesses.size > 0;
+    this.hiddenSuspected = this.suspectsHide.size > 0;
+    if (g.mode === "chase") g.mode = "scatter";
+    g.lastSeen = null;
+    g.lostT = 0;
+    g.sawPlayer = false;
+    g.checkSpot = -1;
+    g.checkT = 0;
+    g.reverseQueued = true;
+    this.searchT.set(g, -30);
+    // Elige un cuadrante de patrulla lo mas alejado posible del escondite
+    if (this.hidden && this.patrolWaypoints.length > 0) {
+      let bestIdx = g.patrolIdx;
+      let bestDist = -1;
+      for (let i = 0; i < this.patrolWaypoints.length; i++) {
+        const wp = this.patrolWaypoints[i];
+        const d = Math.hypot(wp[0] - this.hidden.cell[0], wp[1] - this.hidden.cell[1]);
+        if (d > bestDist) { bestDist = d; bestIdx = i; }
+      }
+      g.patrolIdx = (bestIdx + g.kind) % this.patrolWaypoints.length;
+    }
+  }
+
+  /**
+   * Siguiente punto de patrulla para un fantasma en dispersion: rota por los cuadrantes del laberinto
+   * y, si se indica `awayFrom` (el escondite del jugador), solo elige destinos alejados de esa celda.
+   */
+  private nextPatrolTarget(g: GhostSim, awayFrom?: Cell): Cell {
+    const waypoints = this.patrolWaypoints.length ? this.patrolWaypoints : [g.corner];
+    let pool = waypoints;
+    if (awayFrom) {
+      const minDist = Math.max(5, Math.min(this.maze.W, this.maze.H) * 0.38);
+      const far = waypoints.filter((w) => Math.hypot(w[0] - awayFrom[0], w[1] - awayFrom[1]) >= minDist);
+      if (far.length > 0) pool = far;
+    } else if (this.hideSpots.length > 0) {
+      const clearOfHide = waypoints.filter((w) => this.hideSpots.every((h) => Math.hypot(w[0] - h.cell[0], w[1] - h.cell[1]) >= 2.2));
+      if (clearOfHide.length >= 2) pool = clearOfHide;
+    }
+    let idx = g.patrolIdx % pool.length;
+    let target = pool[idx];
+    if (Math.hypot(g.cx - target[0], g.cy - target[1]) <= 2.2) {
+      g.patrolIdx = (g.patrolIdx + 1) % waypoints.length;
+      idx = g.patrolIdx % pool.length;
+      target = pool[idx];
+    }
+    return target;
+  }
+
   /**
    * Dispara un jadeo audible dentro del escondite: alerta a los fantasmas en un radio de 8 celdas y,
    * si alguno esta a corta distancia (< 2.1 u) con linea de vision a la puerta, descubre al jugador.
@@ -963,6 +1104,8 @@ export class Simulation {
       if (g.lethal && Math.hypot(g.cx - pc[0], g.cy - pc[1]) < 8) {
         g.lastSeen = [pc[0], pc[1]];
         g.lostT = 0;
+        this.dismissedHide.delete(g);
+        this.suspectsHide.add(g);
         this.hiddenSuspected = true;
       }
     }
@@ -974,6 +1117,7 @@ export class Simulation {
         const nextS = Math.min(1.2, (this.suspicion.get(g) ?? 0) + (rhythmFail ? 0.55 : HIDE_GASP));
         this.suspicion.set(g, nextS);
         if (rhythmFail && dist < 2.1 && this.maze.rayClear(g.x, g.z, d0.x, d0.z, 0.4)) {
+          this.dismissedHide.delete(g);
           this.gaspExposed.add(g);
           this.suspicion.set(g, 1.05);
         }
@@ -1003,13 +1147,13 @@ export class Simulation {
     let minGhostDist = Infinity;
     let closeWatcher = false;
     for (const g of this.ghosts) {
-      if (!g.lethal) continue;
+      if (!g.lethal || this.dismissedHide.has(g)) continue;
       const d = Math.hypot(g.x - door.x, g.z - door.z);
       if (d < minGhostDist) minGhostDist = d;
       if (d < 2.15 && this.maze.rayClear(g.x, g.z, door.x, door.z, 0.4)) {
         const dirx = (door.x - g.x) / (d || 1), dirz = (door.z - g.z) / (d || 1);
         const facing = Math.sin(g.yaw) * dirx + Math.cos(g.yaw) * dirz;
-        if (d < 1.4 || facing > 0.34) closeWatcher = true;
+        if (facing > 0.34) closeWatcher = true;
       }
     }
 
@@ -1097,7 +1241,7 @@ export class Simulation {
       const los = d < HIDE_SIGHT && this.maze.rayClear(g.x, g.z, door.x, door.z, 0.4);
       const dirx = (door.x - g.x) / (d || 1), dirz = (door.z - g.z) / (d || 1);
       const facing = Math.sin(g.yaw) * dirx + Math.cos(g.yaw) * dirz;
-      const sees = los && (d < 1.4 || facing > 0.34);
+      const sees = !this.dismissedHide.has(g) && los && facing > 0.34;
       const canCatch = this.witnesses.has(g) || this.gaspExposed.has(g);
       let t = this.searchT.get(g) ?? 0;
       if (t < 0) t = Math.min(0, t + dt); // enfriamiento tras rendirse
@@ -1110,10 +1254,10 @@ export class Simulation {
         }
         t += dt;
         if (t >= (checking > 1 ? CHECK_LINGER + 0.5 : this.lingerTime)) {
-          // no se convence: se marcha y no vuelve a mirar durante un rato
-          t = -6;
-          g.reverseQueued = true;
-          if (!canCatch) g.lastSeen = null;
+          // no se convence: se marcha al otro extremo del mapa y no vuelve a rondar este escondite
+          this.dismissGhostFromHide(g);
+          t = -30;
+          s = Math.min(s, 0.4);
         }
       } else if (!sees) {
         s = Math.max(0, s - HIDE_DECAY * dt);
@@ -1135,23 +1279,27 @@ export class Simulation {
   }
 
   /**
-   * Armario que debe revisar este fantasma: si perdio al jugador hace poco cerca de uno o dos armarios, va a mirarlos
-   * (el mas cercano a donde lo vio por ultima vez primero). Cada armario se revisa como mucho cada 25 s por fantasma.
+   * Armario que debe revisar este fantasma: si perdio al jugador hace poco cerca de un armario, como maximo UN
+   * fantasma se acerca a mirarlo brevemente y luego todo el equipo aplica un enfriamiento largo sobre ese escondite.
    */
   private checkTarget(g: GhostSim): Cell | null {
     if ((this.diff.tactics ?? 2) < 1 || !this.hideSpots.length) return null;
     if (g.checkSpot >= 0) return this.hideSpots[g.checkSpot]?.cell ?? null;
     const seen = g.lastSeen;
-    if (!seen || g.sawPlayer || g.lostT <= 0.4) return null;
+    if (!seen || g.sawPlayer || g.lostT <= 0.4 || g.lostT > 2.4) return null;
     if (g.checkedAt.length !== this.hideSpots.length) g.checkedAt = this.hideSpots.map(() => -1e9);
+    if (this.spotCheckedAt.length !== this.hideSpots.length) this.spotCheckedAt = this.hideSpots.map(() => -1e9);
     let best = -1, bd = CHECK_RADIUS;
     this.hideSpots.forEach((h, i) => {
       if (this.time - g.checkedAt[i] < CHECK_COOLDOWN) return;
+      if (this.time - this.spotCheckedAt[i] < CHECK_COOLDOWN * 0.75) return;
+      if (this.ghosts.some((o) => o !== g && o.checkSpot === i)) return;
       const d = Math.hypot(h.cell[0] - seen[0], h.cell[1] - seen[1]);
       if (d < bd) { bd = d; best = i; }
     });
     if (best < 0) return null;
     g.checkSpot = best; g.checkT = 0;
+    this.spotCheckedAt[best] = this.time;
     this.emit({ type: "hideCheck", ghost: g.kind });
     return this.hideSpots[best].cell;
   }

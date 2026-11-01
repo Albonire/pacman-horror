@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CELL } from "../config/constants";
-import { GhostSim, type AIContext } from "./ghost";
+import { GhostSim, chooseToward, type AIContext } from "./ghost";
 import { canHear, canSee, chaseTarget, junctionAhead, noticePlayer, searchTarget } from "./hunt";
 import { Maze } from "./maze";
 import { Trail } from "./trail";
@@ -378,6 +378,36 @@ describe("Blinky stalker target calculation", () => {
       pinky.lastSeen = [1, 5];
       const ctx = createAIContext(maze, { playerCell: [1, 5], playerHeading: [0, -1] });
       expect(chaseTarget(pinky, ctx)).toEqual([1, 5]);
+    });
+
+    it("al llegar a la celda lastSeen sin ver al jugador, proyecta hacia adelante segun lastHeading en vez de detenerse", () => {
+      const maze = createTestMaze();
+      const blinky = new GhostSim(0, maze, [1, 5], [1, 1]);
+      blinky.cx = 1;
+      blinky.cy = 5;
+      blinky.sawPlayer = false;
+      blinky.lastSeen = [1, 5];
+      blinky.lastHeading = [0, -1];
+      blinky.lostT = 0.5;
+      const ctx = createAIContext(maze, { playerCell: [7, 7], memory: 3.0 });
+      expect(chaseTarget(blinky, ctx)).toEqual(junctionAhead(maze, [1, 5], [0, -1], 4));
+    });
+
+    it("chooseToward evita pasillos con penalizacion avoidCells cuando hay rutas equivalentes", () => {
+      const maze = createTestMaze();
+      const g = new GhostSim(0, maze, [1, 1], [7, 7]);
+      g.cx = 1;
+      g.cy = 1;
+      g.dx = 0;
+      g.dy = -1; // viene del sur hacia la esquina (1,1), puede ir al este [1,0] o al sur [0,1] si no fuera reversa; probemos viniendo de (1,2)
+      const ctx = createAIContext(maze, {
+        avoidCells: [{ cell: [2, 1], radius: 3, penalty: 10 }],
+      });
+      // Desde (1,1) con dx=-1, dy=0 (viniendo del oeste, opciones son este [1,0] -> (2,1) o sur [0,1] -> (1,2))
+      g.dx = -1;
+      g.dy = 0;
+      const dir = chooseToward(g, ctx, [7, 7], 0);
+      expect(dir).toEqual([0, 1]);
     });
   });
 });

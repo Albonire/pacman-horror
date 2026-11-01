@@ -235,4 +235,74 @@ describe("escondites: sospecha, aliento y revisiones", () => {
     expect(sim.hidden).toBe(h);
     expect(sim.hiddenSeen).toBe(false);
   });
+
+  it("los fantasmas no acampan alrededor del escondite cuando entras sin ser visto y se alejan a patrullar otros sectores", () => {
+    const sim = mk("nightmare");
+    quiet(sim);
+    const h = sim.hideSpots[0];
+    sim.player.x = h.x; sim.player.z = h.z; sim.player.invuln = 0;
+    // Forzamos modo Elroy en Blinky (quedan pocos puntos) para comprobar que tampoco se queda pegado al escondite
+    sim.dotsEaten = Math.floor(sim.totalDots * 0.92);
+
+    // Despertamos a todos los fantasmas cerca del escondite en modo chase, pero ocultos tras vapor al instante de entrar
+    for (const g of sim.ghosts) {
+      g.mode = "chase";
+      g.wakeTimer = 0;
+      placeGhost(sim, g, h, 2.2);
+    }
+    sim.steamVents[0].x = (sim.player.x + sim.ghosts[0].x) * 0.5;
+    sim.steamVents[0].z = (sim.player.z + sim.ghosts[0].z) * 0.5;
+    sim.steamVents[0].state = "erupting";
+    sim.steamVents[0].timer = 2;
+
+    sim.update(DT, { ...NO_INPUT, interact: true });
+    expect(sim.hidden).toBe(h);
+    expect(sim.hiddenSeen).toBe(false);
+    expect(sim.hiddenSuspected).toBe(false);
+
+    // Tras 8 segundos de simulacion, todos los fantasmas deben haberse alejado del escondite sin detectar al jugador
+    for (let i = 0; i < 60 * 8; i++) {
+      sim.update(DT, NO_INPUT);
+    }
+    expect(sim.state).toBe("playing");
+    for (const g of sim.ghosts) {
+      const dist = Math.hypot(g.x - h.x, g.z - h.z);
+      expect(dist).toBeGreaterThan(5.2);
+    }
+    expect(sim.heartMinigame).toBe(false);
+  });
+
+  it("un fantasma que oye entrar al jugador, inspecciona el escondite y no lo descubre se marcha lejos y no vuelve a acampar", () => {
+    const sim = mk("normal");
+    quiet(sim);
+    const h = sim.hideSpots[0];
+    sim.player.x = h.x; sim.player.z = h.z; sim.player.invuln = 0;
+    sim.player.running = true;
+
+    const g = sim.ghosts[0];
+    g.mode = "chase";
+    g.wakeTimer = 0;
+    // Colocamos al fantasma a 1.5u pero tras entrar corriendo (para que sospeche por oido sin fijarlo con placeGhost cada tick)
+    placeGhost(sim, g, h, 1.5);
+    // Hacemos que no nos vea entrar directamente (mirando hacia otro lado al instante de entrar)
+    sim.steamVents[0].x = (sim.player.x + g.x) * 0.5;
+    sim.steamVents[0].z = (sim.player.z + g.z) * 0.5;
+    sim.steamVents[0].state = "erupting";
+    sim.steamVents[0].timer = 0.2;
+
+    sim.update(DT, { ...NO_INPUT, interact: true, sprint: true });
+    expect(sim.hidden).toBe(h);
+    expect(sim.hiddenSeen).toBe(false);
+    expect(sim.hiddenSuspected).toBe(true);
+
+    // El jugador mantiene la calma (contiene el aliento / ritmo) mientras el fantasma inspecciona y luego se marcha libremente
+    for (let i = 0; i < 60 * 10 && sim.state === "playing"; i++) {
+      const hold = i < 60 * 4.2; // contiene el aliento durante la inspeccion inicial
+      sim.update(DT, { ...NO_INPUT, sonar: hold });
+    }
+    expect(sim.state).toBe("playing");
+    expect(sim.hiddenSuspected).toBe(false);
+    const finalDist = Math.hypot(g.x - h.x, g.z - h.z);
+    expect(finalDist).toBeGreaterThan(6.0);
+  });
 });

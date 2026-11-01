@@ -62,6 +62,8 @@ export class GhostSim {
   checkT = 0;
   /** Instante de simulacion de la ultima revision de cada escondite (para no repetirlos enseguida). */
   checkedAt: number[] = [];
+  /** Indice del punto de patrulla actual para rotar por cuadrantes y no acampar en una esquina. */
+  patrolIdx = 0;
 
   // sigilo: a veces el fantasma se acerca sin hacer ruido (y sin avisar con el pulso del jugador)
   /** True mientras este fantasma se mueve en silencio. */
@@ -74,6 +76,7 @@ export class GhostSim {
 
   constructor(kind: GhostKind, maze: Maze, spawn: Cell, corner: Cell) {
     this.kind = kind;
+    this.patrolIdx = kind;
     this.stealthSeed = 0x9e3779b1 * (kind + 1) >>> 0;
     this.spawn = spawn;
     this.corner = corner;
@@ -121,6 +124,7 @@ export class GhostSim {
     this.lostT = 0;
     this.sawPlayer = false;
     this.lastHeading = [0, 0];
+    this.patrolIdx = this.kind;
     // mira hacia un pasillo abierto
     let best: Cell = [0, 1];
     for (const d of DIRS) if (maze.isWalkable(this.cx + d[0], this.cy + d[1])) { best = d; break; }
@@ -195,6 +199,12 @@ export class GhostSim {
 
 // ---------------- IA ----------------
 
+export interface AvoidZone {
+  cell: Cell;
+  radius: number;
+  penalty: number;
+}
+
 export interface AIContext {
   maze: Maze;
   playerCell: Cell;
@@ -222,6 +232,8 @@ export interface AIContext {
   tactics?: 0 | 1 | 2;
   /** Fugas de vapor activas (bloquean la linea de vision de los fantasmas). */
   activeSteam?: readonly { x: number; z: number }[];
+  /** Zonas a evitar en bifurcaciones (p. ej. escondites cuando patrullan sin sospecha). */
+  avoidCells?: readonly AvoidZone[];
 }
 
 
@@ -261,10 +273,22 @@ export function chooseToward(g: GhostSim, ctx: AIContext, target: Cell, mistake 
   for (const d of options) {
     const nx = maze.wrapX(g.cx + d[0], g.cy + d[1]), ny = g.cy + d[1];
     let dist = field[ny * maze.W + nx];
-    // Cohesion estrategica: penalizacion leve en bifurcaciones si otro fantasma activo ya esta en esa celda
-    // para evitar que caminen en fila india y favorecer movimientos envolventes
-    const occupied = ctx.ghosts.some((o) => o !== g && o.active && o.cx === nx && o.cy === ny);
-    if (occupied) dist += 1.5;
+    // Cohesion estrategica: penalizacion en bifurcaciones si otro fantasma activo ya esta en esa rama
+    // (celda inmediata o 2 celdas mas adelante avanzando en la misma direccion) para favorecer pinzas envolventes
+    const n2x = maze.wrapX(nx + d[0], ny + d[1]), n2y = ny + d[1];
+    for (const o of ctx.ghosts) {
+      if (o === g || !o.active) continue;
+      if (o.cx === nx && o.cy === ny) { dist += 1.8; break; }
+      if (o.cx === n2x && o.cy === n2y && o.dx === d[0] && o.dy === d[1]) { dist += 1.4; break; }
+    }
+    if (ctx.avoidCells && ctx.avoidCells.length > 0) {
+      for (const az of ctx.avoidCells) {
+        const ad = Math.hypot(nx - az.cell[0], ny - az.cell[1]);
+        if (ad < az.radius) {
+          dist += az.penalty * (1 - ad / az.radius);
+        }
+      }
+    }
     if (dist < bd) { bd = dist; best = d; }
   }
   if (bd >= UNREACHABLE) return options[Math.floor(rng() * options.length)];
